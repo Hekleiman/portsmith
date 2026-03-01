@@ -1,0 +1,399 @@
+[
+  {
+    "title": "TypeScript Generics Help",
+    "create_time": 1705300000,
+    "update_time": 1705303600,
+    "conversation_id": "conv-001",
+    "mapping": {
+      "root-node": {
+        "id": "root-node",
+        "message": null,
+        "parent": null,
+        "children": ["msg-system"]
+      },
+      "msg-system": {
+        "id": "msg-system",
+        "message": {
+          "id": "msg-system",
+          "author": { "role": "system" },
+          "create_time": 1705300000,
+          "content": {
+            "content_type": "text",
+            "parts": ["You are ChatGPT, a large language model."]
+          },
+          "status": "finished_successfully"
+        },
+        "parent": "root-node",
+        "children": ["msg-user-1"]
+      },
+      "msg-user-1": {
+        "id": "msg-user-1",
+        "message": {
+          "id": "msg-user-1",
+          "author": { "role": "user" },
+          "create_time": 1705300100,
+          "content": {
+            "content_type": "text",
+            "parts": ["Can you explain TypeScript generics?"]
+          },
+          "status": "finished_successfully"
+        },
+        "parent": "msg-system",
+        "children": ["msg-assistant-1"]
+      },
+      "msg-assistant-1": {
+        "id": "msg-assistant-1",
+        "message": {
+          "id": "msg-assistant-1",
+          "author": { "role": "assistant" },
+          "create_time": 1705300200,
+          "content": {
+            "content_type": "text",
+            "parts": ["TypeScript generics allow you to create reusable components that work with multiple types."]
+          },
+          "status": "finished_successfully"
+        },
+        "parent": "msg-user-1",
+        "children": ["msg-user-2"]
+      },
+      "msg-user-2": {
+        "id": "msg-user-2",
+        "message": {
+          "id": "msg-user-2",
+          "author": { "role": "user" },
+          "create_time": 1705300300,
+          "content": {
+            "content_type": "text",
+            "parts": ["Can you show an example with constraints?"]
+          },
+          "status": "finished_successfully"
+        },
+        "parent": "msg-assistant-1",
+        "children": ["msg-assistant-2"]
+      },
+      "msg-assistant-2": {
+        "id": "msg-assistant-2",
+        "message": {
+          "id": "msg-assistant-2",
+          "author": { "role": "assistant" },
+          "create_time": 1705300400,
+          "content": {
+            "content_type": "text",
+            "parts": ["Here is an example: function getLength<T extends { length: number }>(arg: T): number { return arg.length; }"]
+          },
+          "status": "finished_successfully"
+        },
+        "parent": "msg-user-2",
+        "children": []
+      }
+    },
+    "current_node": "msg-assistant-2"
+  },
+  {
+    "title": "Code Review Bot Session",
+    "create_time": 1705400000,
+    "update_time": 1705403600,
+    "conversation_id": "conv-002",
+    "gizmo_id": "g-code-reviewer-123",
+    "mapping": {
+      "root": {
+        "id": "root",
+        "message": null,
+        "parent": null,
+        "children": ["sys"]
+      },
+      "sys": {
+        "id": "sys",
+        "message": {
+          "id": "sys",
+          "author": { "role": "system" },
+          "create_time": 1705400000,
+          "content": {
+            "content_type": "text",
+            "parts": ["You are a code review assistant."]
+          }
+        },
+        "parent": "root",
+        "children": ["u1"]
+      },
+      "u1": {
+        "id": "u1",
+        "message": {
+          "id": "u1",
+          "author": { "role": "user" },
+          "create_time": 1705400100,
+          "content": {
+            "content_type": "text",
+            "parts": ["Review this function for bugs."]
+          }
+        },
+        "parent": "sys",
+        "children": ["a1"]
+      },
+      "a1": {
+        "id": "a1",
+        "message": {
+          "id": "a1",
+          "author": { "role": "assistant" },
+          "create_time": 1705400200,
+          "content": {
+            "content_type": "text",
+            "parts": ["I found two potential issues in your code."]
+          }
+        },
+        "parent": "u1",
+        "children": []
+      }
+    },
+    "current_node": "a1"
+  },
+  {
+    "title": "Writing Assistant Chat",
+    "create_time": 1705500000,
+    "update_time": 1705503600,
+    "conversation_id": "conv-003",
+    "gizmo_id": "g-code-reviewer-123",
+    "mapping": {
+      "root": {
+        "id": "root",
+        "message": null,
+        "parent": null,
+        "children": ["u1"]
+      },
+      "u1": {
+        "id": "u1",
+        "message": {
+          "id": "u1",
+          "author": { "role": "user" },
+          "create_time": 1705500100,
+          "content": {
+            "content_type": "text",
+            "parts": ["Help me write an email."]
+          }
+        },
+        "parent": "root",
+        "children": ["a1"]
+      },
+      "a1": {
+        "id": "a1",
+        "message": {
+          "id": "a1",
+          "author": { "role": "assistant" },
+          "create_time": 1705500200,
+          "content": {
+            "content_type": "text",
+            "parts": ["Sure, here is a draft email for you."]
+          }
+        },
+        "parent": "u1",
+        "children": []
+      }
+    },
+    "current_node": "a1"
+  },
+  {
+    "title": "Branching Conversation",
+    "create_time": 1705600000,
+    "update_time": 1705603600,
+    "conversation_id": "conv-004",
+    "mapping": {
+      "root": {
+        "id": "root",
+        "message": null,
+        "parent": null,
+        "children": ["u1"]
+      },
+      "u1": {
+        "id": "u1",
+        "message": {
+          "id": "u1",
+          "author": { "role": "user" },
+          "create_time": 1705600100,
+          "content": {
+            "content_type": "text",
+            "parts": ["Explain recursion."]
+          }
+        },
+        "parent": "root",
+        "children": ["a1-short", "a1-long"]
+      },
+      "a1-short": {
+        "id": "a1-short",
+        "message": {
+          "id": "a1-short",
+          "author": { "role": "assistant" },
+          "create_time": 1705600200,
+          "content": {
+            "content_type": "text",
+            "parts": ["Recursion is when a function calls itself."]
+          }
+        },
+        "parent": "u1",
+        "children": []
+      },
+      "a1-long": {
+        "id": "a1-long",
+        "message": {
+          "id": "a1-long",
+          "author": { "role": "assistant" },
+          "create_time": 1705600250,
+          "content": {
+            "content_type": "text",
+            "parts": ["Recursion is a programming technique where a function calls itself to solve smaller instances of the same problem."]
+          }
+        },
+        "parent": "u1",
+        "children": ["u2"]
+      },
+      "u2": {
+        "id": "u2",
+        "message": {
+          "id": "u2",
+          "author": { "role": "user" },
+          "create_time": 1705600300,
+          "content": {
+            "content_type": "text",
+            "parts": ["Can you show a base case example?"]
+          }
+        },
+        "parent": "a1-long",
+        "children": ["a2"]
+      },
+      "a2": {
+        "id": "a2",
+        "message": {
+          "id": "a2",
+          "author": { "role": "assistant" },
+          "create_time": 1705600400,
+          "content": {
+            "content_type": "text",
+            "parts": ["A classic example is factorial: function factorial(n) { if (n <= 1) return 1; return n * factorial(n - 1); }"]
+          }
+        },
+        "parent": "u2",
+        "children": []
+      }
+    },
+    "current_node": "a2"
+  },
+  {
+    "title": "Empty Conversation",
+    "create_time": 1705700000,
+    "update_time": 1705700000,
+    "conversation_id": "conv-005",
+    "mapping": {
+      "root": {
+        "id": "root",
+        "message": null,
+        "parent": null,
+        "children": []
+      }
+    },
+    "current_node": "root"
+  },
+  {
+    "title": "Multipart Content",
+    "create_time": 1705800000,
+    "update_time": 1705803600,
+    "conversation_id": "conv-006",
+    "mapping": {
+      "root": {
+        "id": "root",
+        "message": null,
+        "parent": null,
+        "children": ["u1"]
+      },
+      "u1": {
+        "id": "u1",
+        "message": {
+          "id": "u1",
+          "author": { "role": "user" },
+          "create_time": 1705800100,
+          "content": {
+            "content_type": "multimodal_text",
+            "parts": [
+              "Here is my code:",
+              { "asset_pointer": "file-abc123", "content_type": "image/png" },
+              "What do you think?"
+            ]
+          }
+        },
+        "parent": "root",
+        "children": ["a1"]
+      },
+      "a1": {
+        "id": "a1",
+        "message": {
+          "id": "a1",
+          "author": { "role": "assistant" },
+          "create_time": 1705800200,
+          "content": {
+            "content_type": "text",
+            "parts": ["Your code looks good but I have some suggestions."]
+          }
+        },
+        "parent": "u1",
+        "children": []
+      }
+    },
+    "current_node": "a1"
+  },
+  {
+    "title": "Tool Use Conversation",
+    "create_time": 1705900000,
+    "update_time": 1705903600,
+    "conversation_id": "conv-007",
+    "gizmo_id": "g-data-analyst-456",
+    "mapping": {
+      "root": {
+        "id": "root",
+        "message": null,
+        "parent": null,
+        "children": ["u1"]
+      },
+      "u1": {
+        "id": "u1",
+        "message": {
+          "id": "u1",
+          "author": { "role": "user" },
+          "create_time": 1705900100,
+          "content": {
+            "content_type": "text",
+            "parts": ["Analyze this dataset."]
+          }
+        },
+        "parent": "root",
+        "children": ["tool1"]
+      },
+      "tool1": {
+        "id": "tool1",
+        "message": {
+          "id": "tool1",
+          "author": { "role": "tool", "name": "python" },
+          "create_time": 1705900150,
+          "content": {
+            "content_type": "text",
+            "parts": ["import pandas as pd\ndf = pd.read_csv('data.csv')"]
+          }
+        },
+        "parent": "u1",
+        "children": ["a1"]
+      },
+      "a1": {
+        "id": "a1",
+        "message": {
+          "id": "a1",
+          "author": { "role": "assistant" },
+          "create_time": 1705900200,
+          "content": {
+            "content_type": "text",
+            "parts": ["I've analyzed the dataset. Here are the key findings."]
+          }
+        },
+        "parent": "tool1",
+        "children": []
+      }
+    },
+    "current_node": "a1"
+  }
+]

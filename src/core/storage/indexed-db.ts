@@ -30,6 +30,8 @@ export interface MigrationStateSnapshot {
   phase: MigrationPhase;
   sourcePlatform: string | null;
   targetPlatform: string | null;
+  extractionMethod: ExtractionMethod | null;
+  deliveryMode: DeliveryMode | null;
   manifestId: string | null;
   selectedWorkspaceIds: string[];
   completedWorkspaceIds: string[];
@@ -48,6 +50,10 @@ export type MigrationPhase =
   | "migrating"
   | "verification"
   | "complete";
+
+export type ExtractionMethod = "upload" | "browser" | "both";
+
+export type DeliveryMode = "autofill" | "guided" | "hybrid";
 
 // ─── Database ────────────────────────────────────────────────
 

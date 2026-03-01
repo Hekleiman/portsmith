@@ -1,12 +1,14 @@
 import {
   type MigrationPhase,
   type MigrationStateSnapshot,
+  type ExtractionMethod,
+  type DeliveryMode,
   saveCheckpoint,
   loadLatestCheckpoint,
   clearCheckpoints,
 } from "./indexed-db";
 
-export type { MigrationPhase, MigrationStateSnapshot };
+export type { MigrationPhase, MigrationStateSnapshot, ExtractionMethod, DeliveryMode };
 
 // ─── Factory ─────────────────────────────────────────────────
 
@@ -15,6 +17,8 @@ export function createInitialState(): MigrationStateSnapshot {
     phase: "idle",
     sourcePlatform: null,
     targetPlatform: null,
+    extractionMethod: null,
+    deliveryMode: null,
     manifestId: null,
     selectedWorkspaceIds: [],
     completedWorkspaceIds: [],

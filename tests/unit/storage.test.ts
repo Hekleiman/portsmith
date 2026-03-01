@@ -28,6 +28,8 @@ function sampleState(
     phase: "extracting",
     sourcePlatform: "chatgpt",
     targetPlatform: "claude",
+    extractionMethod: null,
+    deliveryMode: null,
     manifestId: "m-001",
     selectedWorkspaceIds: ["ws-001", "ws-002"],
     completedWorkspaceIds: ["ws-001"],

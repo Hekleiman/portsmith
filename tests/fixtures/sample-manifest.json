@@ -1,0 +1,195 @@
+{
+  "version": "0.1.0",
+  "exportedAt": "2025-01-15T10:30:00Z",
+  "source": {
+    "platform": "chatgpt",
+    "version": "2025-01",
+    "tier": "plus",
+    "exportMethod": "dom_extraction",
+    "exportedAt": "2025-01-15T10:30:00Z"
+  },
+  "user": {
+    "name": "Jane Developer",
+    "profession": "Software Engineer",
+    "expertise": ["TypeScript", "React", "Node.js"],
+    "communicationStyle": {
+      "formality": "casual",
+      "verbosity": "concise",
+      "preferences": ["code examples over explanations", "no fluff"]
+    },
+    "interests": ["web development", "AI tooling", "developer experience"],
+    "locale": "en-US",
+    "timezone": "America/New_York"
+  },
+  "workspaces": [
+    {
+      "id": "ws-001",
+      "sourceId": "gpt-code-reviewer",
+      "name": "Code Reviewer",
+      "description": "Reviews PRs and suggests improvements following team conventions",
+      "instructions": {
+        "raw": "You are a senior code reviewer. Review code for bugs, performance issues, and style violations. Use our team's TypeScript style guide. Always suggest improvements, never just approve.",
+        "translated": {
+          "claude": "You are a senior code reviewer. Review code for bugs, performance issues, and style violations. Follow the TypeScript style guide provided in the project knowledge. Always suggest concrete improvements with code examples."
+        }
+      },
+      "knowledgeFiles": [
+        {
+          "id": "kf-001",
+          "originalName": "typescript-style-guide.md",
+          "mimeType": "text/markdown",
+          "sizeBytes": 24576,
+          "source": "exported",
+          "contentRef": "blob://kf-001",
+          "description": "Team TypeScript style guide and conventions",
+          "compatible": true
+        }
+      ],
+      "category": "coding",
+      "tags": ["code-review", "typescript", "team-conventions"],
+      "behavior": {
+        "tone": "direct and constructive",
+        "responseFormat": "markdown with code blocks",
+        "constraints": [
+          "Always reference the style guide",
+          "Include severity levels for issues"
+        ],
+        "triggerPhrases": ["review this", "check this PR"]
+      },
+      "capabilities": [
+        {
+          "type": "code_execution",
+          "required": false,
+          "equivalent": "artifacts",
+          "available": true
+        },
+        {
+          "type": "web_browsing",
+          "required": false,
+          "available": true
+        }
+      ],
+      "conversationCount": 47,
+      "lastActiveAt": "2025-01-14T18:00:00Z",
+      "sampleTopics": [
+        "React component review",
+        "API endpoint validation",
+        "Database query optimization"
+      ],
+      "migration": {
+        "confidence": 0.85,
+        "warnings": [
+          "Code execution capability maps to Claude Artifacts with limitations"
+        ],
+        "manualStepsRequired": [
+          "Upload typescript-style-guide.md to project knowledge"
+        ]
+      }
+    },
+    {
+      "id": "ws-002",
+      "sourceId": "gpt-blog-writer",
+      "name": "Technical Blog Writer",
+      "description": "Writes and edits technical blog posts for the company engineering blog",
+      "instructions": {
+        "raw": "You help write technical blog posts. Target audience: intermediate to senior developers. Write in a conversational but informative tone. Include code examples. Posts should be 1500-2500 words."
+      },
+      "knowledgeFiles": [],
+      "category": "writing",
+      "tags": ["blog", "technical-writing", "content"],
+      "behavior": {
+        "tone": "conversational yet informative",
+        "responseFormat": "markdown",
+        "constraints": [
+          "1500-2500 words per post",
+          "Include at least 2 code examples",
+          "Add a TL;DR at the top"
+        ]
+      },
+      "capabilities": [
+        {
+          "type": "web_browsing",
+          "required": true,
+          "available": true
+        },
+        {
+          "type": "image_generation",
+          "required": false,
+          "platformSpecific": "DALL-E integration",
+          "available": false
+        }
+      ],
+      "conversationCount": 12,
+      "lastActiveAt": "2025-01-10T14:00:00Z",
+      "sampleTopics": [
+        "React Server Components deep dive",
+        "Migrating from REST to GraphQL"
+      ],
+      "migration": {
+        "confidence": 0.92,
+        "warnings": [
+          "Image generation not available on target platform"
+        ],
+        "manualStepsRequired": []
+      }
+    }
+  ],
+  "memory": [
+    {
+      "id": "mem-001",
+      "fact": "Prefers TypeScript with strict mode enabled in all projects",
+      "category": "preference",
+      "confidence": 0.95,
+      "source": "explicit",
+      "workspaceIds": ["ws-001"],
+      "migration": {
+        "fitsConstraints": true,
+        "priority": 8
+      }
+    },
+    {
+      "id": "mem-002",
+      "fact": "Works at Acme Corp as a senior frontend engineer on the Payments team",
+      "category": "identity",
+      "confidence": 1.0,
+      "source": "explicit",
+      "workspaceIds": [],
+      "migration": {
+        "fitsConstraints": true,
+        "priority": 9
+      }
+    },
+    {
+      "id": "mem-003",
+      "fact": "Uses Neovim as primary editor with a custom LSP configuration",
+      "category": "tool",
+      "confidence": 0.8,
+      "source": "inferred",
+      "workspaceIds": ["ws-001"],
+      "migration": {
+        "fitsConstraints": true,
+        "priority": 5
+      }
+    }
+  ],
+  "globalInstructions": "Always respond in English. Prefer concise answers. Use code examples whenever possible. Follow TypeScript best practices.",
+  "conversationSummaries": [
+    {
+      "id": "conv-001",
+      "title": "Setting up ESLint flat config",
+      "date": "2025-01-12T09:00:00Z",
+      "workspaceId": "ws-001",
+      "topics": ["ESLint", "flat config", "TypeScript integration"],
+      "keyDecisions": [
+        "Adopted flat config format over legacy .eslintrc",
+        "Using @typescript-eslint/parser v8"
+      ],
+      "artifacts": ["eslint.config.mjs"],
+      "summary": "Migrated project from .eslintrc.cjs to ESLint flat config format. Resolved compatibility issues with TypeScript parser and React plugin."
+    }
+  ],
+  "metadata": {
+    "taskId": "migration-20250115-001",
+    "generatedBy": "portsmith/0.1.0"
+  }
+}

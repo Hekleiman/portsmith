@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "Portsmith",
+  "version": "0.1.0",
+  "description": "Migrate AI assistant configurations between platforms",
+  "permissions": ["activeTab", "storage", "sidePanel", "scripting"],
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "https://chat.openai.com/*",
+    "https://claude.ai/*"
+  ],
+  "background": {
+    "service_worker": "src/background/service-worker.ts",
+    "type": "module"
+  },
+  "side_panel": {
+    "default_path": "src/sidepanel/index.html"
+  },
+  "action": {
+    "default_popup": "src/popup/index.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
+      "js": ["src/content-scripts/chatgpt/extractor.ts"]
+    },
+    {
+      "matches": ["https://claude.ai/*"],
+      "js": ["src/content-scripts/claude/importer.ts"]
+    }
+  ]
+}
