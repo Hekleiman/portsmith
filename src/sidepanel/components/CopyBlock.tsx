@@ -10,6 +10,7 @@ export default function CopyBlock({
   content,
 }: CopyBlockProps): React.JSX.Element {
   const [copied, setCopied] = useState(false);
+  const [expanded, setExpanded] = useState(false);
 
   const handleCopy = useCallback(async () => {
     try {
@@ -33,8 +34,14 @@ export default function CopyBlock({
 
   return (
     <div className="mt-2 rounded-md border border-gray-200 bg-gray-50">
-      <div className="flex items-center justify-between border-b border-gray-200 px-3 py-1.5">
-        <span className="text-[11px] font-medium text-gray-500">{label}</span>
+      <div className="flex items-center justify-between px-3 py-1.5">
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="text-[11px] font-medium text-gray-500 hover:text-gray-700"
+        >
+          {expanded ? `Hide ${label} \u25BE` : `Preview ${label} \u25B8`}
+        </button>
         <div className="flex items-center gap-2">
           <span className="text-[10px] text-gray-400">
             {content.length.toLocaleString()} chars
@@ -52,9 +59,11 @@ export default function CopyBlock({
           </button>
         </div>
       </div>
-      <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-words px-3 py-2 text-xs text-gray-700">
-        {content}
-      </pre>
+      {expanded && (
+        <pre className="max-h-[200px] overflow-y-auto border-t border-gray-200 whitespace-pre-wrap break-words px-3 py-2 font-mono text-xs text-gray-700">
+          {content}
+        </pre>
+      )}
     </div>
   );
 }

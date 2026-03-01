@@ -105,7 +105,7 @@ export default function ModeSelect(): React.JSX.Element {
           How should we import?
         </h2>
         <p className="mt-1 text-sm text-gray-500">
-          Choose how Portsmith delivers your data into Claude.
+          Choose how PortSmith delivers your data into Claude.
         </p>
       </div>
       <div className="flex flex-col gap-2">

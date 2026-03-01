@@ -6,7 +6,11 @@ import {
   type ChatGPTDOMData,
 } from "@/core/transform/workspace-mapper";
 import { saveManifest } from "@/core/storage/indexed-db";
-import { sendTabMessage, onMessage } from "@/shared/messaging";
+import {
+  safeSendTabMessage,
+  onMessage,
+} from "@/shared/messaging";
+import type { SidebarItem } from "@/shared/messaging";
 import type { RawChatGPTData } from "@/core/adapters/types";
 import type { ExtractionMethod } from "@/core/storage/migration-state";
 import type { TrackedStep } from "../components/ProgressTracker";
@@ -28,6 +32,16 @@ function buildSteps(method: ExtractionMethod): TrackedStep[] {
 
   if (method === "browser" || method === "both") {
     steps.push(
+      {
+        id: "scan_sidebar",
+        label: "Scanning sidebar...",
+        status: "pending",
+      },
+      {
+        id: "projects",
+        label: "Extracting projects...",
+        status: "pending",
+      },
       {
         id: "custom_gpts",
         label: "Reading Custom GPTs...",
@@ -92,9 +106,11 @@ export default function Extract(): React.JSX.Element {
   // ─── Step status helpers ─────────────────────────────────
 
   const markStep = useCallback(
-    (index: number, status: TrackedStep["status"]) => {
+    (index: number, status: TrackedStep["status"], detail?: string) => {
       setSteps((prev) =>
-        prev.map((s, i) => (i === index ? { ...s, status } : s)),
+        prev.map((s, i) =>
+          i === index ? { ...s, status, ...(detail !== undefined ? { detail } : {}) } : s,
+        ),
       );
     },
     [],
@@ -135,35 +151,142 @@ export default function Extract(): React.JSX.Element {
         if (method === "browser" || method === "both") {
           const tabId = await findChatGPTTab();
 
-          // Custom GPTs
+          // 1. Scan sidebar for projects and GPTs
+          markStep(stepIdx, "active");
+          let projectTargets: SidebarItem[] = [];
+          try {
+            const scanResult = await safeSendTabMessage(tabId, "SCAN_SIDEBAR");
+            projectTargets = scanResult.projects;
+
+            // Store sidebar-discovered GPTs directly in domDataRef.
+            // extractCustomGPTs() only works on gpt_editor/gpt_list pages,
+            // not the chat page we return to after project extraction.
+            // Sidebar scan is the reliable source for GPT discovery.
+            if (scanResult.gpts.length > 0) {
+              domDataRef.current.customGPTs = scanResult.gpts.map((item) => ({
+                id: item.id,
+                name: item.name,
+                description: "",
+                instructions: "",
+                conversationStarters: [],
+                knowledgeFileNames: [],
+              }));
+            }
+
+            console.log(
+              `[PortSmith] Sidebar scan: ${scanResult.projects.length} projects, ${scanResult.gpts.length} GPTs`,
+            );
+
+            const detail =
+              `Found ${scanResult.projects.length} project${scanResult.projects.length === 1 ? "" : "s"}, ` +
+              `${scanResult.gpts.length} GPT${scanResult.gpts.length === 1 ? "" : "s"}`;
+            markStep(stepIdx, "complete", detail);
+          } catch {
+            markStep(stepIdx, "complete", "Sidebar scan failed — continuing");
+          }
+          stepIdx++;
+
+          // 2. Extract projects via API (no page navigation needed)
+          markStep(stepIdx, "active");
+          if (projectTargets.length > 0) {
+            try {
+              const projPromise = new Promise<void>((resolve) => {
+                const unsub = onMessage("DOM_EXTRACT_RESULT", (payload) => {
+                  if (payload.type === "projects") {
+                    if (payload.data.projects.length > 0) {
+                      domDataRef.current.projects = payload.data.projects;
+                      console.log(
+                        "[PortSmith] Extracted",
+                        payload.data.projects.length,
+                        "projects via API",
+                      );
+                    }
+                    unsub();
+                    resolve();
+                  }
+                });
+                setTimeout(() => {
+                  unsub();
+                  resolve();
+                }, DOM_TIMEOUT_MS);
+              });
+              await safeSendTabMessage(tabId, "DOM_EXTRACT", {
+                target: "projects",
+              });
+              await projPromise;
+            } catch {
+              // Non-fatal
+            }
+
+            // Fallback: if API extraction returned nothing, use sidebar names
+            if (!domDataRef.current.projects || domDataRef.current.projects.length === 0) {
+              domDataRef.current.projects = projectTargets.map((item) => ({
+                id: item.id,
+                name: item.name,
+                description: "",
+                instructions: "",
+                knowledgeFileNames: [],
+                conversationCount: 0,
+              }));
+              console.log(
+                "[PortSmith] API extraction returned no projects; using sidebar fallback for",
+                projectTargets.length,
+                "projects",
+              );
+            }
+
+            const projCount = domDataRef.current.projects.length;
+            markStep(
+              stepIdx,
+              "complete",
+              `Extracted ${projCount} project${projCount === 1 ? "" : "s"}`,
+            );
+          } else {
+            markStep(stepIdx, "complete", "No projects found");
+          }
+          stepIdx++;
+
+          // 3. Custom GPTs
+          // Sidebar scan (step 1) already stored GPTs in domDataRef.
+          // DOM_EXTRACT only overrides if it finds richer data (e.g. on
+          // the gpt_editor page), which won't happen after navigating
+          // back to chatgpt.com. This prevents the empty DOM result
+          // from wiping out the sidebar-discovered GPTs.
           markStep(stepIdx, "active");
           try {
-            // Set up a one-shot listener to collect results
             const gptPromise = new Promise<void>((resolve) => {
               const unsub = onMessage("DOM_EXTRACT_RESULT", (payload) => {
                 if (payload.type === "custom_gpts") {
-                  domDataRef.current.customGPTs = payload.data.gpts;
+                  if (payload.data.gpts.length > 0) {
+                    domDataRef.current.customGPTs = payload.data.gpts;
+                  }
                   unsub();
                   resolve();
                 }
               });
-              // Fallback timeout so we don't hang forever
               setTimeout(() => {
                 unsub();
                 resolve();
               }, DOM_TIMEOUT_MS);
             });
-            await sendTabMessage(tabId, "DOM_EXTRACT", {
+            await safeSendTabMessage(tabId, "DOM_EXTRACT", {
               target: "custom_gpts",
             });
             await gptPromise;
           } catch {
-            // Non-fatal: continue with remaining extractions
+            // Non-fatal: sidebar GPTs (if any) already in domDataRef
           }
-          markStep(stepIdx, "complete");
+          const gptCount = domDataRef.current.customGPTs?.length ?? 0;
+          markStep(
+            stepIdx,
+            "complete",
+            gptCount > 0
+              ? `${gptCount} GPT${gptCount === 1 ? "" : "s"} found`
+              : "No Custom GPTs found",
+          );
           stepIdx++;
 
-          // Memory
+          // 4. Memory
           markStep(stepIdx, "active");
           try {
             const memPromise = new Promise<void>((resolve) => {
@@ -179,7 +302,7 @@ export default function Extract(): React.JSX.Element {
                 resolve();
               }, DOM_TIMEOUT_MS);
             });
-            await sendTabMessage(tabId, "DOM_EXTRACT", { target: "memory" });
+            await safeSendTabMessage(tabId, "DOM_EXTRACT", { target: "memory" });
             await memPromise;
           } catch {
             // Non-fatal
@@ -187,7 +310,7 @@ export default function Extract(): React.JSX.Element {
           markStep(stepIdx, "complete");
           stepIdx++;
 
-          // Custom Instructions
+          // 5. Custom Instructions
           markStep(stepIdx, "active");
           try {
             const instrPromise = new Promise<void>((resolve) => {
@@ -204,7 +327,7 @@ export default function Extract(): React.JSX.Element {
                 resolve();
               }, DOM_TIMEOUT_MS);
             });
-            await sendTabMessage(tabId, "DOM_EXTRACT", {
+            await safeSendTabMessage(tabId, "DOM_EXTRACT", {
               target: "custom_instructions",
             });
             await instrPromise;
@@ -227,12 +350,29 @@ export default function Extract(): React.JSX.Element {
 
         const hasDOMData =
           domDataRef.current.customGPTs ||
+          domDataRef.current.projects ||
           domDataRef.current.memory ||
           domDataRef.current.customInstructions;
+
+        console.log("[PortSmith] DOM data summary:", {
+          customGPTs: domDataRef.current.customGPTs?.length ?? 0,
+          projects: domDataRef.current.projects?.length ?? 0,
+          memory: domDataRef.current.memory?.length ?? 0,
+          customInstructions: !!domDataRef.current.customInstructions,
+          hasDOMData: !!hasDOMData,
+        });
 
         const manifest = generateManifest(
           rawData,
           hasDOMData ? domDataRef.current : undefined,
+        );
+
+        console.log(
+          "[PortSmith] Manifest generated:",
+          manifest.workspaces.length,
+          "workspaces,",
+          manifest.memory.length,
+          "memory items",
         );
 
         // Save to IndexedDB
@@ -299,8 +439,8 @@ export default function Extract(): React.JSX.Element {
             Extract from Browser
           </h2>
           <p className="mt-1 text-sm text-gray-500">
-            We'll read your Custom GPTs, memory, and custom instructions
-            directly from chatgpt.com.
+            We'll scan your ChatGPT sidebar for Projects and GPTs, then visit
+            each one to extract its configuration.
           </p>
 
           <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
@@ -310,7 +450,7 @@ export default function Extract(): React.JSX.Element {
             <ul className="mt-2 space-y-1 text-sm text-amber-700">
               <li>1. Open chatgpt.com in another tab</li>
               <li>2. Make sure you're logged in</li>
-              <li>3. Navigate to your GPTs page</li>
+              <li>3. Ensure the sidebar is open (not collapsed)</li>
             </ul>
           </div>
 

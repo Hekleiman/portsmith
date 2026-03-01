@@ -80,7 +80,7 @@ export const PROJECT_FORM = {
     {
       priority: 2,
       type: "css",
-      value: "textarea[placeholder*='description' i], input[placeholder*='description' i], textarea[aria-label*='description' i]",
+      value: "textarea[placeholder*='Describe your project'], textarea[placeholder*='description' i], input[placeholder*='description' i], textarea[aria-label*='description' i]",
       lastVerified: VERIFIED,
     },
     {
@@ -170,6 +170,124 @@ export const PROJECT_FORM = {
   ] satisfies SelectorStrategy[],
 } as const;
 
+// ─── Project Dashboard (post-creation) ──────────────────────
+// URL: claude.ai/project/:id
+// After clicking "Create project" on the modal, the SPA navigates
+// to the project dashboard where instructions, files, and chat live.
+
+export const PROJECT_DASHBOARD = {
+  /**
+   * "Set project instructions" or "+" button in the Instructions section.
+   * NOTE: The primary instructions flow now uses FILL_PROJECT_INSTRUCTIONS
+   * compound handler which finds this button contextually. These selectors
+   * serve as fallback only.
+   */
+  addInstructionsButton: [
+    {
+      priority: 1,
+      type: "testid",
+      value: "add-project-instructions-button",
+      lastVerified: VERIFIED,
+    },
+    {
+      priority: 2,
+      type: "text",
+      value: "Set project instructions",
+      lastVerified: VERIFIED,
+    },
+    {
+      priority: 3,
+      type: "css",
+      value:
+        "button[aria-label*='instruction' i], button[aria-label*='Add instructions' i]",
+      lastVerified: VERIFIED,
+    },
+    {
+      priority: 4,
+      type: "xpath",
+      value:
+        "//*[text()='Instructions']/ancestor::*[position()<=3]//button | //button[contains(text(),'instruction')] | //div[contains(text(),'nstruction')]/ancestor::button",
+      lastVerified: VERIFIED,
+    },
+  ] satisfies SelectorStrategy[],
+
+  /**
+   * Instructions textarea on the project dashboard.
+   * NOTE: The primary instructions flow now uses FILL_PROJECT_INSTRUCTIONS
+   * compound handler which finds the editor contextually. These selectors
+   * serve as fallback only. NEVER use a generic [contenteditable] here —
+   * it matches the chat input ("Reply...") at the top of the page.
+   */
+  instructionsTextarea: [
+    {
+      priority: 1,
+      type: "testid",
+      value: "project-instructions-textarea",
+      lastVerified: VERIFIED,
+    },
+    {
+      priority: 2,
+      type: "css",
+      value:
+        "textarea[placeholder*='instruction' i], textarea[aria-label*='instruction' i]",
+      lastVerified: VERIFIED,
+    },
+    {
+      priority: 3,
+      type: "xpath",
+      value:
+        "//div[contains(@class,'instruction')]//textarea | //div[contains(@class,'instruction')]//div[@contenteditable='true'] | //*[text()='Instructions']/ancestor::div[position()<=3]//textarea",
+      lastVerified: VERIFIED,
+    },
+  ] satisfies SelectorStrategy[],
+
+  /** Save/confirm button for instructions */
+  saveInstructionsButton: [
+    {
+      priority: 1,
+      type: "testid",
+      value: "save-instructions-button",
+      lastVerified: VERIFIED,
+    },
+    {
+      priority: 2,
+      type: "text",
+      value: "Save",
+      lastVerified: VERIFIED,
+    },
+    {
+      priority: 3,
+      type: "css",
+      value:
+        "button[type='submit'], button[aria-label*='Save' i]",
+      lastVerified: VERIFIED,
+    },
+  ] satisfies SelectorStrategy[],
+
+  /** Indicator element proving we're on the project dashboard */
+  projectPageIndicator: [
+    {
+      priority: 1,
+      type: "testid",
+      value: "project-dashboard",
+      lastVerified: VERIFIED,
+    },
+    {
+      priority: 2,
+      type: "css",
+      value: "[data-testid='project-name'], h1[class*='project']",
+      lastVerified: VERIFIED,
+    },
+    {
+      priority: 3,
+      type: "xpath",
+      value:
+        "//div[contains(@class,'project')]//h1 | //div[@data-testid='project-dashboard']",
+      lastVerified: VERIFIED,
+    },
+  ] satisfies SelectorStrategy[],
+} as const;
+
 // ─── Selector Key Map ───────────────────────────────────────
 // Flat lookup used by the importer content script to resolve
 // selector keys sent via messaging.
@@ -183,4 +301,8 @@ export const SELECTOR_MAP = {
   "form.instructionsTextarea": PROJECT_FORM.instructionsTextarea,
   "form.fileUploadInput": PROJECT_FORM.fileUploadInput,
   "form.saveButton": PROJECT_FORM.saveButton,
+  "dashboard.addInstructionsButton": PROJECT_DASHBOARD.addInstructionsButton,
+  "dashboard.instructionsTextarea": PROJECT_DASHBOARD.instructionsTextarea,
+  "dashboard.saveInstructionsButton": PROJECT_DASHBOARD.saveInstructionsButton,
+  "dashboard.projectPageIndicator": PROJECT_DASHBOARD.projectPageIndicator,
 } as const;

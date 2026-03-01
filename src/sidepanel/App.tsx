@@ -52,7 +52,7 @@ export default function App(): React.JSX.Element {
   // Loading while checking for a checkpoint
   if (!resumeChecked) {
     return (
-      <div className="flex h-screen w-[400px] items-center justify-center bg-white">
+      <div className="flex h-screen w-full items-center justify-center bg-white">
         <p className="text-sm text-gray-400">Loading...</p>
       </div>
     );
@@ -61,7 +61,7 @@ export default function App(): React.JSX.Element {
   // Resume prompt
   if (pendingResume) {
     return (
-      <div className="flex h-screen w-[400px] flex-col items-center justify-center bg-white p-6">
+      <div className="flex h-screen w-full flex-col items-center justify-center bg-white p-6">
         <h2 className="text-lg font-semibold text-gray-900">
           Resume Migration?
         </h2>

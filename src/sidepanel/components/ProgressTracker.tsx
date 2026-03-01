@@ -4,6 +4,7 @@ export interface TrackedStep {
   id: string;
   label: string;
   status: "pending" | "active" | "complete" | "error";
+  detail?: string;
 }
 
 export interface ProgressTrackerProps {
@@ -77,21 +78,28 @@ export default function ProgressTracker({
       {/* Step list */}
       <ul className="space-y-2">
         {steps.map((step) => (
-          <li key={step.id} className="flex items-center gap-2.5">
+          <li key={step.id} className="flex items-start gap-2.5">
             <StepIcon status={step.status} />
-            <span
-              className={`text-sm ${
-                step.status === "active"
-                  ? "font-medium text-gray-900"
-                  : step.status === "complete"
-                    ? "text-gray-500"
-                    : step.status === "error"
-                      ? "text-red-600"
-                      : "text-gray-400"
-              }`}
-            >
-              {step.label}
-            </span>
+            <div>
+              <span
+                className={`text-sm ${
+                  step.status === "active"
+                    ? "font-medium text-gray-900"
+                    : step.status === "complete"
+                      ? "text-gray-500"
+                      : step.status === "error"
+                        ? "text-red-600"
+                        : "text-gray-400"
+                }`}
+              >
+                {step.label}
+              </span>
+              {step.detail && (
+                <span className="mt-0.5 block text-xs text-gray-400">
+                  {step.detail}
+                </span>
+              )}
+            </div>
           </li>
         ))}
       </ul>

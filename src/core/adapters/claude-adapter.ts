@@ -24,12 +24,25 @@ export interface ImportInstructions {
 
 // ─── Instruction Generation ─────────────────────────────────
 
-/** Build guided-mode steps for importing a single workspace as a Claude Project. */
+/**
+ * Build guided-mode steps for importing a single workspace as a Claude Project.
+ *
+ * Claude uses a two-phase creation flow:
+ *   Phase 1 (creation modal): Name + Description + "Create project"
+ *   Phase 2 (project dashboard): Instructions + Files + Verify
+ */
 export function generateInstructions(workspace: Workspace): ImportInstructions {
   const instructions =
     workspace.instructions.translated?.claude ?? workspace.instructions.raw;
 
+  // Use workspace name as fallback if description is empty
+  const description =
+    workspace.description.trim().length > 0
+      ? workspace.description
+      : workspace.name;
+
   const steps: ImportStep[] = [
+    // ── Phase 1: Creation modal ─────────────────────────
     {
       id: `${workspace.id}-navigate`,
       title: "Go to Claude Projects",
@@ -41,32 +54,59 @@ export function generateInstructions(workspace: Workspace): ImportInstructions {
       id: `${workspace.id}-create`,
       title: "Create a new project",
       description:
-        'Click the "Create a project" button (or the + icon) to start a new project.',
+        'On the Projects page, click the "Create a project" button (or the + icon) to open the creation modal.',
       copyBlocks: [],
     },
     {
       id: `${workspace.id}-name`,
       title: "Enter the project name",
-      description: "Paste the project name into the name field.",
+      description:
+        "On the project creation screen, paste the project name into the Name field.",
       copyBlocks: [{ label: "Project name", content: workspace.name }],
     },
     {
       id: `${workspace.id}-description`,
       title: "Enter the description",
-      description: "Paste the project description.",
-      copyBlocks: [
-        { label: "Description", content: workspace.description },
-      ],
+      description:
+        "On the project creation screen, paste the description into the Description field.",
+      copyBlocks: [{ label: "Description", content: description }],
     },
     {
-      id: `${workspace.id}-instructions`,
-      title: "Paste the project instructions",
-      description: `Paste these instructions into the project instructions field (${instructions.length.toLocaleString()} chars).`,
-      copyBlocks: [
-        { label: "Project instructions", content: instructions },
-      ],
+      id: `${workspace.id}-save`,
+      title: 'Click "Create project"',
+      description:
+        'Click the "Create project" button. After creation, you\'ll be taken to the project dashboard — this is a different page where you\'ll add instructions.',
+      copyBlocks: [],
     },
   ];
+
+  // ── Phase 2: Project dashboard ──────────────────────
+  if (instructions.length > 0) {
+    steps.push(
+      {
+        id: `${workspace.id}-open-instructions`,
+        title: "Open the instructions editor",
+        description:
+          'After the project is created, you\'ll be on the project dashboard. Scroll down to the "Instructions" section and click "Set project instructions" or the "+" button to open the editor.',
+        copyBlocks: [],
+      },
+      {
+        id: `${workspace.id}-instructions`,
+        title: "Paste the project instructions",
+        description: `On the project dashboard, paste these instructions into the instructions editor (${instructions.length.toLocaleString()} chars). Note: instructions go on this second page, not the creation modal.`,
+        copyBlocks: [
+          { label: "Project instructions", content: instructions },
+        ],
+      },
+      {
+        id: `${workspace.id}-save-instructions`,
+        title: "Save the instructions",
+        description:
+          'Click "Save" to save the project instructions on the dashboard.',
+        copyBlocks: [],
+      },
+    );
+  }
 
   // Knowledge files step — only if there are files to upload
   const compatibleFiles = workspace.knowledgeFiles.filter((f) => f.compatible);
@@ -75,7 +115,7 @@ export function generateInstructions(workspace: Workspace): ImportInstructions {
       id: `${workspace.id}-files`,
       title: "Upload knowledge files",
       description:
-        "Upload the following files to the project knowledge base. You can drag and drop them into the project.",
+        'On the project dashboard, upload the following files to the project knowledge base. You can drag and drop them or use the "Add content" button.',
       copyBlocks: [],
       fileNames: compatibleFiles.map((f) => f.originalName),
     });

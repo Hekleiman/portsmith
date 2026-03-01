@@ -6,6 +6,7 @@ import {
 } from "@/shared/messaging";
 import { useMigrationStore } from "../store/migration-store";
 import StepCard from "../components/StepCard";
+import CopyBlock from "../components/CopyBlock";
 
 // ─── Status Hook ─────────────────────────────────────────────
 
@@ -50,6 +51,8 @@ function StepRow({ title, status }: StepRowProps): React.JSX.Element {
     failed: "\u2717",
     fallback: "\u26A0",
     skipped: "\u2014",
+    clipboard: "\u2398",
+    navigate_failed: "\u2717",
   };
 
   const color: Record<AutofillStepStatus, string> = {
@@ -59,6 +62,8 @@ function StepRow({ title, status }: StepRowProps): React.JSX.Element {
     failed: "text-red-500",
     fallback: "text-amber-500",
     skipped: "text-gray-300",
+    clipboard: "text-blue-500",
+    navigate_failed: "text-red-500 animate-pulse",
   };
 
   return (
@@ -217,6 +222,13 @@ export default function Migrate(): React.JSX.Element {
     goToStep("complete");
   }, [goToStep]);
 
+  const handleConfirmDelivery = useCallback((workspaceId: string) => {
+    void sendMessage("MIGRATION_UPDATE_DELIVERY", {
+      workspaceId,
+      delivery: "manual",
+    });
+  }, []);
+
   const toggleGuidedStep = useCallback((stepId: string) => {
     setGuidedCompletedIds((prev) => {
       const next = new Set(prev);
@@ -248,20 +260,72 @@ export default function Migrate(): React.JSX.Element {
   // ─── Complete ────────────────────────────────────────────
 
   if (status.phase === "complete") {
+    const clipboardWorkspaces = Object.entries(
+      status.instructionsDelivery,
+    ).filter(([, v]) => v === "clipboard");
+    const pendingWorkspaces = Object.entries(
+      status.instructionsDelivery,
+    ).filter(([, v]) => v === "pending" || v === "none");
+    const hasClipboardItems = clipboardWorkspaces.length > 0;
+
     return (
       <div className="flex flex-col items-center justify-center gap-4 py-8 text-center">
-        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-green-100">
-          <span className="text-xl text-green-600">{"\u2713"}</span>
+        <div
+          className={`flex h-12 w-12 items-center justify-center rounded-full ${
+            hasClipboardItems ? "bg-amber-100" : "bg-green-100"
+          }`}
+        >
+          <span
+            className={`text-xl ${
+              hasClipboardItems ? "text-amber-600" : "text-green-600"
+            }`}
+          >
+            {hasClipboardItems ? "\u26A0" : "\u2713"}
+          </span>
         </div>
         <div>
           <h2 className="text-lg font-semibold text-gray-900">
-            All workspaces processed
+            {hasClipboardItems
+              ? "Workspaces processed — instructions pending"
+              : "All workspaces processed"}
           </h2>
           <p className="mt-1 text-sm text-gray-500">
             {status.completedWorkspaceIds.length} workspace
             {status.completedWorkspaceIds.length !== 1 ? "s" : ""} migrated to
             Claude.
           </p>
+          {hasClipboardItems && (
+            <div className="mt-2">
+              <p className="text-xs text-amber-600">
+                {clipboardWorkspaces.length} workspace
+                {clipboardWorkspaces.length !== 1 ? "s" : ""} had instructions
+                copied to clipboard — paste them manually.
+              </p>
+              {clipboardWorkspaces.map(([wsId]) => (
+                <div key={wsId} className="mt-2">
+                  {status.clipboardInstructions[wsId] && (
+                    <CopyBlock
+                      label="instructions"
+                      content={status.clipboardInstructions[wsId]}
+                    />
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => handleConfirmDelivery(wsId)}
+                    className="mt-1.5 rounded-md bg-green-100 px-3 py-1 text-xs font-medium text-green-700 hover:bg-green-200"
+                  >
+                    I've added the instructions
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          {pendingWorkspaces.length > 0 &&
+            pendingWorkspaces.some(([, v]) => v === "pending") && (
+              <p className="mt-1 text-xs text-amber-600">
+                Some workspaces still need instructions entered manually.
+              </p>
+            )}
           {status.failedWorkspaces.length > 0 && (
             <div className="mt-2">
               <p className="text-xs font-medium text-amber-600">
@@ -579,30 +643,139 @@ export default function Migrate(): React.JSX.Element {
         </div>
       )}
 
-      {/* Hybrid confirmation buttons */}
-      {status.pendingConfirmStepId && (
-        <div className="flex items-center justify-between rounded-lg border border-blue-200 bg-blue-50 px-3 py-2">
-          <span className="text-xs font-medium text-blue-700">
-            Ready to execute this step?
-          </span>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => handleConfirm(false)}
-              className="rounded px-3 py-1 text-xs font-medium text-gray-600 hover:bg-gray-100"
-            >
-              Skip
-            </button>
-            <button
-              type="button"
-              onClick={() => handleConfirm(true)}
-              className="rounded bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700"
-            >
-              Execute
-            </button>
-          </div>
+      {/* Per-field status indicators */}
+      {status.currentSteps.length > 0 && (
+        <div className="rounded-lg border border-gray-100 px-3 py-2">
+          <p className="mb-1 text-[11px] font-medium text-gray-400">
+            Field Status
+          </p>
+          {(
+            [
+              ["name", "Project name"],
+              ["description", "Description"],
+              ["instructions", "Instructions"],
+            ] as const
+          ).map(([field, label]) => {
+            const step = status.currentSteps.find((s) =>
+              s.id.endsWith(`-${field}`),
+            );
+            if (!step) return null;
+            const isClipboard = step.status === "clipboard";
+            return (
+              <StepRow
+                key={field}
+                title={
+                  isClipboard ? `${label} (copied to clipboard)` : label
+                }
+                status={step.status}
+              />
+            );
+          })}
         </div>
       )}
+
+      {/* Clipboard notification for instructions */}
+      {(() => {
+        const clipboardStep = status.currentSteps.find(
+          (s) => s.status === "clipboard",
+        );
+        if (!clipboardStep) return null;
+        // Extract workspace ID from step ID (format: "{wsId}-instructions")
+        const clipWsId = Object.entries(status.instructionsDelivery).find(
+          ([, v]) => v === "clipboard",
+        )?.[0];
+        if (!clipWsId) return null;
+        return (
+          <div className="rounded-lg border border-blue-200 bg-blue-50 p-3">
+            <p className="text-xs font-medium text-blue-700">
+              Instructions copied to clipboard
+            </p>
+            <p className="mt-0.5 text-[11px] text-blue-600">
+              Paste these into the project instructions field on Claude.
+            </p>
+            <button
+              type="button"
+              onClick={() => handleConfirmDelivery(clipWsId)}
+              className="mt-2 rounded-md bg-green-100 px-3 py-1 text-xs font-medium text-green-700 hover:bg-green-200"
+            >
+              I've added the instructions
+            </button>
+          </div>
+        );
+      })()}
+
+      {/* Always-visible Copy Instructions button when workspace has instructions */}
+      {status.currentWorkspaceInstructions && (
+        <CopyBlock
+          label={`Instructions for ${status.currentWorkspaceName ?? "workspace"}`}
+          content={status.currentWorkspaceInstructions}
+        />
+      )}
+
+      {/* Navigation failed prompt */}
+      {status.pendingConfirmStepId &&
+        status.currentSteps.find(
+          (s) =>
+            s.id === status.pendingConfirmStepId &&
+            s.status === "navigate_failed",
+        ) && (
+          <div className="rounded-lg border border-red-200 bg-red-50 p-3">
+            <p className="text-sm font-medium text-red-700">
+              Could not navigate to Claude
+            </p>
+            <p className="mt-1 text-xs text-red-600">
+              Please open{" "}
+              <span className="font-medium">claude.ai/projects</span> in your
+              browser tab, then click Retry.
+            </p>
+            <div className="mt-2 flex gap-2">
+              <button
+                type="button"
+                onClick={() => handleConfirm(false)}
+                className="rounded px-3 py-1 text-xs font-medium text-gray-600 hover:bg-gray-100"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => handleConfirm(true)}
+                className="rounded bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700"
+              >
+                Retry
+              </button>
+            </div>
+          </div>
+        )}
+
+      {/* Hybrid confirmation buttons */}
+      {status.pendingConfirmStepId &&
+        !status.currentSteps.find(
+          (s) =>
+            s.id === status.pendingConfirmStepId &&
+            s.status === "navigate_failed",
+        ) && (
+          <div className="flex items-center justify-between rounded-lg border border-blue-200 bg-blue-50 px-3 py-2">
+            <span className="text-xs font-medium text-blue-700">
+              Ready to execute this step?
+            </span>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => handleConfirm(false)}
+                className="rounded px-3 py-1 text-xs font-medium text-gray-600 hover:bg-gray-100"
+              >
+                Skip
+              </button>
+              <button
+                type="button"
+                onClick={() => handleConfirm(true)}
+                className="rounded bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700"
+              >
+                Execute
+              </button>
+            </div>
+          </div>
+        )}
 
       {/* Failed workspace warnings */}
       {status.failedWorkspaces.length > 0 && (

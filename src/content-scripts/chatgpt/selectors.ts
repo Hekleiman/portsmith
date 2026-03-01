@@ -11,6 +11,7 @@ import type { SelectorStrategy } from "@/content-scripts/common/selector-engine"
 const VERIFIED = "2026-02-28";
 
 // ─── Login Detection ────────────────────────────────────────
+// Used by: extractor.ts → checkLoggedIn()
 
 export const LOGIN_AVATAR: SelectorStrategy[] = [
   {
@@ -35,6 +36,12 @@ export const LOGIN_AVATAR: SelectorStrategy[] = [
 
 // ─── GPT Editor Page ────────────────────────────────────────
 // URL: chatgpt.com/gpts/editor/* or chatgpt.com/gpts/editor/new
+// Used by: extractor.ts → extractSingleGPT()
+//
+// NOTE: The GPT editor page (/gpts/editor/<id>) requires navigating
+// to each GPT individually. The /gpts/mine list page shows cards
+// but full config (instructions, files) is only on the editor page.
+// These selectors target the "Configure" tab view of the editor.
 
 export const GPT_EDITOR = {
   /** GPT name input field */
@@ -172,42 +179,250 @@ export const GPT_EDITOR = {
 
 // ─── GPT Management/List Page ───────────────────────────────
 // URL: chatgpt.com/gpts/mine
+// Used by: extractor.ts → extractCustomGPTs() for list-page discovery
+//
+// NOTE: This page lists GPTs as cards linking to /gpts/editor/<id>.
+// Only name and ID can be read from the list; full config requires
+// navigating into each editor page.
 
 export const GPT_LIST = {
-  /** Individual GPT cards in the management list */
+  /** GPT links in the sidebar. Each is a nav <a> with href /g/g-<id>.
+   *  Excludes project links (href ending in /project).
+   *  Example: /g/g-1Z8uzeu5R-resume-wizard */
   gptCards: [
     {
       priority: 1,
       type: "css",
-      value: "a[href*='/gpts/editor/']",
+      value: 'nav a[href*="/g/g-"]:not([href$="/project"])',
       lastVerified: VERIFIED,
     },
     {
       priority: 2,
       type: "css",
-      value: "[data-testid='gpt-list-item'], [data-testid='gpt-card']",
+      value: 'a[href*="/g/g-"]:not([href$="/project"])',
+      lastVerified: VERIFIED,
+    },
+    {
+      priority: 3,
+      type: "css",
+      value: "a[href*='/gpts/editor/']",
+      lastVerified: VERIFIED,
+    },
+  ] satisfies SelectorStrategy[],
+
+  /** GPT name within a sidebar link */
+  gptCardName: [
+    {
+      priority: 1,
+      type: "css",
+      value: "a[href*=\"/g/g-\"]:not([href$=\"/project\"]) [class*='truncate'], a[href*=\"/g/g-\"]:not([href$=\"/project\"]) span",
+      lastVerified: VERIFIED,
+    },
+    {
+      priority: 2,
+      type: "xpath",
+      value: ".//span | .//div[contains(@class, 'truncate')]",
+      lastVerified: VERIFIED,
+    },
+  ] satisfies SelectorStrategy[],
+};
+
+// ─── ChatGPT Projects ──────────────────────────────────────
+// ChatGPT Projects appear in the sidebar and at chatgpt.com/project/<id>.
+// Projects contain: name, instructions, knowledge files, scoped conversations.
+// They map directly to Claude Projects — higher fidelity than Custom GPTs.
+//
+// Used by: extractor.ts → extractProjects()
+
+export const PROJECT_SIDEBAR = {
+  /** Project links in the sidebar. Each is a nav <a> whose href ends with /project.
+   *  Example: /g/g-p-68fbd0de40248191a303c2a93435081a-japan-china-korea-trip/project */
+  projectLinks: [
+    {
+      priority: 1,
+      type: "css",
+      value: 'nav a[href$="/project"]',
+      lastVerified: VERIFIED,
+    },
+    {
+      priority: 2,
+      type: "css",
+      value: 'a[href$="/project"]',
       lastVerified: VERIFIED,
     },
     {
       priority: 3,
       type: "xpath",
-      value: "//a[contains(@href, '/gpts/editor')]",
+      value: "//nav//a[substring(@href, string-length(@href) - 7) = '/project']",
       lastVerified: VERIFIED,
     },
   ] satisfies SelectorStrategy[],
 
-  /** GPT name within a card */
-  gptCardName: [
+  /** Project name text within a sidebar link */
+  projectLinkName: [
     {
       priority: 1,
       type: "css",
-      value: "a[href*='/gpts/editor/'] h3, a[href*='/gpts/editor/'] [class*='title']",
+      value: "a[href$=\"/project\"] [class*='truncate'], a[href$=\"/project\"] span",
       lastVerified: VERIFIED,
     },
     {
       priority: 2,
       type: "xpath",
-      value: ".//h3 | .//span[contains(@class, 'title')]",
+      value: ".//span | .//div[contains(@class, 'truncate')]",
+      lastVerified: VERIFIED,
+    },
+  ] satisfies SelectorStrategy[],
+};
+
+export const PROJECT_PAGE = {
+  /** Project name heading on the /project/<id> page */
+  name: [
+    {
+      priority: 1,
+      type: "css",
+      value: "h1, [data-testid='project-name']",
+      lastVerified: VERIFIED,
+    },
+    {
+      priority: 2,
+      type: "xpath",
+      value: "//h1 | //div[@data-testid='project-name']",
+      lastVerified: VERIFIED,
+    },
+    {
+      priority: 3,
+      type: "css",
+      value: "main h1, [role='heading'][aria-level='1']",
+      lastVerified: VERIFIED,
+    },
+  ] satisfies SelectorStrategy[],
+
+  /** Project instructions/custom instructions area.
+   *  On the project page, instructions may be in a textarea, a
+   *  contenteditable div, or a read-only display block. */
+  instructions: [
+    {
+      priority: 1,
+      type: "css",
+      value: "[data-testid='project-instructions'] textarea, [data-testid='project-instructions']",
+      lastVerified: VERIFIED,
+    },
+    {
+      priority: 2,
+      type: "xpath",
+      value: "//label[contains(text(),'nstructions')]/following::textarea[1] | //span[contains(text(),'nstructions')]/ancestor::div[1]/following-sibling::div//textarea",
+      lastVerified: VERIFIED,
+    },
+    {
+      priority: 3,
+      type: "css",
+      value: "textarea[placeholder*='nstructions'], textarea[placeholder*='project']",
+      lastVerified: VERIFIED,
+    },
+  ] satisfies SelectorStrategy[],
+
+  /** Button that opens the "Project settings" modal (Radix dialog) */
+  settingsModalTrigger: [
+    {
+      priority: 1,
+      type: "testid",
+      value: "project-modal-trigger",
+      lastVerified: VERIFIED,
+    },
+    {
+      priority: 2,
+      type: "css",
+      value: "button[data-testid='project-modal-trigger']",
+      lastVerified: VERIFIED,
+    },
+    {
+      priority: 3,
+      type: "xpath",
+      value: "//button[@data-testid='project-modal-trigger']",
+      lastVerified: VERIFIED,
+    },
+  ] satisfies SelectorStrategy[],
+
+  /** The "Project settings" modal dialog (Radix portal) */
+  settingsModal: [
+    {
+      priority: 1,
+      type: "aria",
+      value: "Project settings",
+      lastVerified: VERIFIED,
+    },
+    {
+      priority: 2,
+      type: "css",
+      value: "form[aria-label='Project settings']",
+      lastVerified: VERIFIED,
+    },
+    {
+      priority: 3,
+      type: "css",
+      value: "[role='dialog']",
+      lastVerified: VERIFIED,
+    },
+  ] satisfies SelectorStrategy[],
+
+  /** Instructions textarea inside the "Project settings" modal form.
+   *  Must be scoped to the form to avoid matching the chat input textarea. */
+  modalInstructions: [
+    {
+      priority: 1,
+      type: "css",
+      value: "form[aria-label='Project settings'] textarea",
+      lastVerified: VERIFIED,
+    },
+    {
+      priority: 2,
+      type: "xpath",
+      value: "//form[@aria-label='Project settings']//textarea",
+      lastVerified: VERIFIED,
+    },
+    {
+      priority: 3,
+      type: "css",
+      value: "[role='dialog'] form textarea",
+      lastVerified: VERIFIED,
+    },
+  ] satisfies SelectorStrategy[],
+
+  /** Knowledge/uploaded files in the project settings panel */
+  knowledgeFiles: [
+    {
+      priority: 1,
+      type: "css",
+      value: "[data-testid='project-files'] span, [data-testid='project-files'] [class*='file-name']",
+      lastVerified: VERIFIED,
+    },
+    {
+      priority: 2,
+      type: "xpath",
+      value: "//span[contains(text(),'Files') or contains(text(),'files')]/ancestor::div[1]/following-sibling::div//span[contains(@class,'truncate')] | //div[contains(@class,'file')]//span",
+      lastVerified: VERIFIED,
+    },
+    {
+      priority: 3,
+      type: "css",
+      value: "[class*='file-list'] span, [class*='uploaded'] span:first-child",
+      lastVerified: VERIFIED,
+    },
+  ] satisfies SelectorStrategy[],
+
+  /** Conversation items scoped to this project (visible in project view) */
+  conversations: [
+    {
+      priority: 1,
+      type: "css",
+      value: "a[href*='/c/'], [data-testid='conversation-item']",
+      lastVerified: VERIFIED,
+    },
+    {
+      priority: 2,
+      type: "xpath",
+      value: "//a[contains(@href, '/c/')]",
       lastVerified: VERIFIED,
     },
   ] satisfies SelectorStrategy[],

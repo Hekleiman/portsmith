@@ -36,6 +36,11 @@ export interface MigrationStateSnapshot {
   selectedWorkspaceIds: string[];
   completedWorkspaceIds: string[];
   errors: string[];
+  /** Per-workspace tracking of how instructions were delivered */
+  instructionsDelivery?: Record<
+    string,
+    "autofilled" | "clipboard" | "manual" | "none" | "pending"
+  >;
 }
 
 export type MigrationPhase =

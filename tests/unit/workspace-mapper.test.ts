@@ -6,7 +6,7 @@ import {
 import { mapMemoryItems, CLAUDE_MAX_MEMORY_CHARS } from "@/core/transform/memory-mapper";
 import { PortsmithManifestSchema } from "@/core/schema/types";
 import type { RawChatGPTData, ParsedConversation } from "@/core/adapters/types";
-import type { ExtractedCustomGPT } from "@/core/adapters/chatgpt-dom-types";
+import type { ExtractedCustomGPT, ExtractedChatGPTProject } from "@/core/adapters/chatgpt-dom-types";
 
 // ─── Helpers ─────────────────────────────────────────────────
 
@@ -44,6 +44,20 @@ function makeGPT(overrides?: Partial<ExtractedCustomGPT>): ExtractedCustomGPT {
     instructions: "Help the user with coding tasks.",
     conversationStarters: ["How do I...?"],
     knowledgeFileNames: [],
+    ...overrides,
+  };
+}
+
+function makeProject(
+  overrides?: Partial<ExtractedChatGPTProject>,
+): ExtractedChatGPTProject {
+  return {
+    id: "proj-abc-123",
+    name: "Test Project",
+    description: "",
+    instructions: "Help with my project tasks.",
+    knowledgeFileNames: [],
+    conversationCount: 0,
     ...overrides,
   };
 }
@@ -554,5 +568,137 @@ describe("full integration", () => {
     expect(manifest.workspaces).toHaveLength(0);
     expect(manifest.memory).toHaveLength(0);
     expect(manifest.globalInstructions).toBe("");
+  });
+});
+
+// ─── ChatGPT Projects ───────────────────────────────────────
+
+describe("ChatGPT Project workspace mapping", () => {
+  it("creates workspaces from Projects", () => {
+    const project = makeProject({
+      name: "My Research",
+      instructions: "Assist with academic research tasks.",
+    });
+    const manifest = generateManifest(makeRawData(), {
+      projects: [project],
+    });
+
+    expect(manifest.workspaces).toHaveLength(1);
+    expect(manifest.workspaces[0]!.name).toBe("My Research");
+    expect(manifest.workspaces[0]!.instructions.raw).toBe(
+      "Assist with academic research tasks.",
+    );
+  });
+
+  it("produces valid PortsmithManifest with Projects", () => {
+    const manifest = generateManifest(makeRawData(), {
+      projects: [makeProject()],
+    });
+    const result = PortsmithManifestSchema.safeParse(manifest);
+    expect(result.success).toBe(true);
+  });
+
+  it("assigns workspace IDs with ws-proj- prefix", () => {
+    const manifest = generateManifest(makeRawData(), {
+      projects: [makeProject({ id: "abc-def" })],
+    });
+    expect(manifest.workspaces[0]!.id).toBe("ws-proj-abc-def");
+    expect(manifest.workspaces[0]!.sourceId).toBe("abc-def");
+  });
+
+  it("tags project workspaces with 'chatgpt-project'", () => {
+    const manifest = generateManifest(makeRawData(), {
+      projects: [makeProject()],
+    });
+    expect(manifest.workspaces[0]!.tags).toContain("chatgpt-project");
+  });
+
+  it("gives Projects higher confidence than equivalent GPTs", () => {
+    // Use instructions with knowledge files so the GPT doesn't max out at 1.0
+    const instructions = "Help with coding tasks. Use DALL-E to generate diagrams.";
+    const files = ["guide.pdf", "ref.md", "notes.txt"];
+    const gpt = makeGPT({ instructions, knowledgeFileNames: files });
+    const project = makeProject({ instructions, knowledgeFileNames: files });
+
+    const gptManifest = generateManifest(makeRawData(), { customGPTs: [gpt] });
+    const projManifest = generateManifest(makeRawData(), { projects: [project] });
+
+    expect(projManifest.workspaces[0]!.migration.confidence).toBeGreaterThan(
+      gptManifest.workspaces[0]!.migration.confidence,
+    );
+  });
+
+  it("maps knowledge files from Projects", () => {
+    const project = makeProject({
+      knowledgeFileNames: ["readme.md", "data.csv"],
+    });
+    const manifest = generateManifest(makeRawData(), {
+      projects: [project],
+    });
+    const files = manifest.workspaces[0]!.knowledgeFiles;
+    expect(files).toHaveLength(2);
+    expect(files[0]!.originalName).toBe("readme.md");
+    expect(files[1]!.originalName).toBe("data.csv");
+  });
+
+  it("preserves conversation count from Projects", () => {
+    const project = makeProject({ conversationCount: 7 });
+    const manifest = generateManifest(makeRawData(), {
+      projects: [project],
+    });
+    expect(manifest.workspaces[0]!.conversationCount).toBe(7);
+  });
+
+  it("categorizes project workspaces", () => {
+    const project = makeProject({
+      name: "Code Review",
+      instructions: "Review code, debug issues, and refactor software.",
+    });
+    const manifest = generateManifest(makeRawData(), {
+      projects: [project],
+    });
+    expect(manifest.workspaces[0]!.category).toBe("coding");
+  });
+
+  it("translates project instructions for Claude", () => {
+    const project = makeProject({
+      instructions: "Act as a senior developer. You MUST always use TypeScript.",
+    });
+    const manifest = generateManifest(makeRawData(), {
+      projects: [project],
+    });
+    const ws = manifest.workspaces[0]!;
+    expect(ws.instructions.translated).toBeDefined();
+    expect(ws.instructions.translated!.claude).toContain("Help as");
+    expect(ws.instructions.translated!.claude).toContain("Please always");
+  });
+
+  it("sets exportMethod to dom_extraction when projects provided", () => {
+    const manifest = generateManifest(makeRawData(), {
+      projects: [makeProject()],
+    });
+    expect(manifest.source.exportMethod).toBe("dom_extraction");
+  });
+
+  it("combines Projects and GPTs in the same manifest", () => {
+    const manifest = generateManifest(makeRawData(), {
+      projects: [makeProject({ name: "My Project" })],
+      customGPTs: [makeGPT({ name: "My GPT" })],
+    });
+
+    expect(manifest.workspaces).toHaveLength(2);
+    // Projects come first in the list
+    expect(manifest.workspaces[0]!.name).toBe("My Project");
+    expect(manifest.workspaces[1]!.name).toBe("My GPT");
+  });
+
+  it("handles empty instructions gracefully", () => {
+    const project = makeProject({ instructions: "" });
+    const manifest = generateManifest(makeRawData(), {
+      projects: [project],
+    });
+    const result = PortsmithManifestSchema.safeParse(manifest);
+    expect(result.success).toBe(true);
+    expect(manifest.workspaces[0]!.instructions.raw).toBe("");
   });
 });

@@ -180,7 +180,7 @@ describe("messaging", () => {
         },
       );
 
-      const result = await sendMessage("OPEN_SIDE_PANEL");
+      const result = await sendMessage("EXTRACT_PROGRESS", { step: "test", percent: 0 });
       expect(result).toBeUndefined();
     });
   });
@@ -422,6 +422,76 @@ describe("messaging", () => {
         vi.fn(),
       );
       expect(result).toBe(false);
+    });
+  });
+
+  // ── New Message Types ──────────────────────────────────
+
+  describe("new message types", () => {
+    it("sends WAIT_FOR_NAVIGATION with correct payload", async () => {
+      mockChrome.tabs.sendMessage.mockImplementation(
+        (
+          _tabId: number,
+          _envelope: unknown,
+          callback: (r: unknown) => void,
+        ) => {
+          callback({
+            __portsmith: true,
+            ok: true,
+            data: { success: true, currentUrl: "https://claude.ai/project/abc-123" },
+          });
+        },
+      );
+
+      const result = await sendTabMessage(42, "WAIT_FOR_NAVIGATION", {
+        urlPattern: "^https://claude\\.ai/project/[a-f0-9-]+",
+        timeoutMs: 15000,
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.currentUrl).toBe("https://claude.ai/project/abc-123");
+    });
+
+    it("sends CLIPBOARD_WRITE with correct payload", async () => {
+      mockChrome.tabs.sendMessage.mockImplementation(
+        (
+          _tabId: number,
+          _envelope: unknown,
+          callback: (r: unknown) => void,
+        ) => {
+          callback({
+            __portsmith: true,
+            ok: true,
+            data: { success: true },
+          });
+        },
+      );
+
+      const result = await sendTabMessage(42, "CLIPBOARD_WRITE", {
+        text: "Test instructions content",
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it("sends GET_PAGE_URL and receives URL", async () => {
+      mockChrome.tabs.sendMessage.mockImplementation(
+        (
+          _tabId: number,
+          _envelope: unknown,
+          callback: (r: unknown) => void,
+        ) => {
+          callback({
+            __portsmith: true,
+            ok: true,
+            data: { url: "https://claude.ai/projects" },
+          });
+        },
+      );
+
+      const result = await sendTabMessage(42, "GET_PAGE_URL");
+
+      expect(result.url).toBe("https://claude.ai/projects");
     });
   });
 

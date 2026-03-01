@@ -1,5 +1,8 @@
 import type { PortsmithManifest } from "@/core/schema/types";
-import type { DOMExtractionResult } from "@/core/adapters/chatgpt-dom-types";
+import type {
+  DOMExtractionResult,
+  ProjectExtractionResult,
+} from "@/core/adapters/chatgpt-dom-types";
 
 // ─── Placeholder Types (move to dedicated modules when implemented) ──
 
@@ -36,7 +39,9 @@ export type AutofillStepStatus =
   | "success"
   | "failed"
   | "fallback"
-  | "skipped";
+  | "skipped"
+  | "clipboard"
+  | "navigate_failed";
 
 /** Legacy placeholder — kept for backward compatibility */
 export interface AutofillStep {
@@ -47,8 +52,50 @@ export interface AutofillStep {
 
 export type DOMExtractionTarget =
   | "custom_gpts"
+  | "projects"
   | "memory"
   | "custom_instructions";
+
+// ─── Gizmo API Types ──────────────────────────────────────────
+
+export interface GizmoAPIResponse {
+  gizmo?: {
+    id: string;
+    instructions: string;
+    display: {
+      name: string;
+      description: string;
+      prompt_starters: string[];
+    };
+    memory_enabled: boolean;
+  };
+  files?: Array<{ name: string; type: string; size: number }>;
+  error?: string;
+}
+
+// ─── Sidebar Scan Types ─────────────────────────────────────
+
+export interface SidebarItem {
+  id: string;
+  name: string;
+  url: string;
+}
+
+export interface SidebarScanResult {
+  projects: SidebarItem[];
+  gpts: SidebarItem[];
+}
+
+// ─── DOM Inspection Types ───────────────────────────────────
+
+export interface DOMInspectionReport {
+  url: string;
+  page: string;
+  loggedIn: boolean;
+  sidebarProjectCount: number;
+  sidebarGPTCount: number;
+  timestamp: number;
+}
 
 // ─── Orchestrator Types ─────────────────────────────────────
 
@@ -61,11 +108,20 @@ export interface MigrationStepFallback {
   link?: string;
 }
 
+export type InstructionsDelivery =
+  | "autofilled"
+  | "clipboard"
+  | "manual"
+  | "none"
+  | "pending";
+
 export interface MigrationStep {
   id: string;
   title: string;
   status: AutofillStepStatus;
   fallback?: MigrationStepFallback;
+  /** Set on instructions-related steps to track delivery method */
+  instructionsDelivery?: InstructionsDelivery;
 }
 
 export interface MigrationGuidedInstructions {
@@ -87,6 +143,12 @@ export interface OrchestratorStatus {
   guidedInstructions: MigrationGuidedInstructions | null;
   memorySteps: MigrationStepFallback[];
   hasMemory: boolean;
+  /** Per-workspace tracking of how instructions were delivered */
+  instructionsDelivery: Record<string, InstructionsDelivery>;
+  /** Instructions text for the current workspace (for clipboard UI) */
+  currentWorkspaceInstructions: string | null;
+  /** Per-workspace instructions text for workspaces that fell back to clipboard */
+  clipboardInstructions: Record<string, string>;
 }
 
 // ─── Message Map ─────────────────────────────────────────────
@@ -120,9 +182,17 @@ export interface MessageMap {
     request: { url: string; platform: string };
     response: void;
   };
-  OPEN_SIDE_PANEL: {
+  DOM_INSPECT: {
     request: void;
-    response: void;
+    response: DOMInspectionReport;
+  };
+  SCAN_SIDEBAR: {
+    request: void;
+    response: SidebarScanResult;
+  };
+  EXTRACT_PROJECT_PAGE: {
+    request: void;
+    response: ProjectExtractionResult;
   };
   DOM_EXTRACT: {
     request: { target: DOMExtractionTarget };
@@ -168,9 +238,46 @@ export interface MessageMap {
     request: void;
     response: { success: boolean };
   };
+  MIGRATION_UPDATE_DELIVERY: {
+    request: { workspaceId: string; delivery: InstructionsDelivery };
+    response: { success: boolean };
+  };
   VERIFY_PROJECTS: {
     request: { projectNames: string[] };
     response: { found: string[]; notFound: string[] };
+  };
+  /** Ask content script to watch for SPA navigation to a matching URL */
+  WAIT_FOR_NAVIGATION: {
+    request: { urlPattern: string; timeoutMs: number };
+    response: { success: boolean; currentUrl: string; error?: string };
+  };
+  /** Copy text to clipboard from the content script context */
+  CLIPBOARD_WRITE: {
+    request: { text: string };
+    response: { success: boolean; error?: string };
+  };
+  /** Get the current page URL from the content script */
+  GET_PAGE_URL: {
+    request: void;
+    response: { url: string };
+  };
+  /** Compound action: scroll to Instructions section, click "+", fill editor, save */
+  FILL_PROJECT_INSTRUCTIONS: {
+    request: { instructions: string };
+    response: { success: boolean; saved?: boolean; error?: string };
+  };
+  CLICK_IN_MAIN_WORLD: {
+    request: { selector: string };
+    response: boolean;
+  };
+  FETCH_GIZMO_API: {
+    request: { gizmoId: string };
+    response: GizmoAPIResponse;
+  };
+  /** Lightweight ping to verify content script is alive */
+  PING: {
+    request: void;
+    response: { pong: true };
   };
 }
 
@@ -239,6 +346,56 @@ export class NoListenerError extends MessageError {
     this.name = "NoListenerError";
   }
 }
+
+// ─── Content Script Injection ─────────────────────────────────
+
+/**
+ * Convert a Chrome match pattern (e.g. "https://chatgpt.com/*") to a RegExp.
+ * Only handles literal schemes and hosts with a wildcard path — sufficient
+ * for the patterns declared in our manifest.
+ */
+function matchesUrlPattern(url: string, pattern: string): boolean {
+  const escaped = pattern
+    .replace(/[.+?^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*/g, ".*");
+  return new RegExp(`^${escaped}$`).test(url);
+}
+
+/**
+ * Programmatically inject the manifest-declared content script(s) that
+ * match the given tab's URL. Used as a fallback when the extension was
+ * installed/reloaded while the tab was already open.
+ */
+async function injectContentScript(tabId: number): Promise<void> {
+  const manifest = chrome.runtime.getManifest();
+  const tab = await chrome.tabs.get(tabId);
+  const tabUrl = tab.url ?? "";
+  const contentScripts = manifest.content_scripts ?? [];
+  const filesToInject: string[] = [];
+
+  for (const cs of contentScripts) {
+    const matches = cs.matches ?? [];
+    const isMatch = matches.some((p) => matchesUrlPattern(tabUrl, p));
+    if (isMatch && cs.js) {
+      filesToInject.push(...cs.js);
+    }
+  }
+
+  if (filesToInject.length === 0) {
+    throw new MessageError(
+      "INJECT",
+      `No content scripts match URL: ${tabUrl}`,
+    );
+  }
+
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: filesToInject,
+  });
+}
+
+/** Tracks tabs where we already attempted programmatic injection. */
+const injectedTabs = new Set<number>();
 
 // ─── Send ────────────────────────────────────────────────────
 
@@ -311,7 +468,8 @@ export function sendTabMessage<K extends MessageName>(
         const msg = chrome.runtime.lastError.message ?? "Unknown error";
         if (
           msg.includes("Receiving end does not exist") ||
-          msg.includes("Could not establish connection")
+          msg.includes("Could not establish connection") ||
+          msg.includes("back/forward cache")
         ) {
           reject(new NoListenerError(String(name)));
         } else {
@@ -332,6 +490,51 @@ export function sendTabMessage<K extends MessageName>(
       }
     });
   });
+}
+
+// ─── Safe Send (with injection fallback) ─────────────────────
+
+/**
+ * Wrapper around `sendTabMessage` that automatically injects the content
+ * script when the receiving end doesn't exist (i.e. extension was
+ * installed/reloaded while the target tab was already open).
+ *
+ * 1. Tries `sendTabMessage`
+ * 2. On `NoListenerError`: programmatically injects content script,
+ *    waits 500ms for initialisation, then retries once
+ * 3. On second failure: throws the error
+ */
+export function safeSendTabMessage<K extends MessageName>(
+  tabId: number,
+  name: K,
+  ...[data]: MessageMap[K]["request"] extends void
+    ? []
+    : [MessageMap[K]["request"]]
+): Promise<MessageMap[K]["response"]> {
+  const args = (data === undefined ? [] : [data]) as MessageMap[K]["request"] extends void
+    ? []
+    : [MessageMap[K]["request"]];
+
+  return sendTabMessage(tabId, name, ...args).catch(
+    async (err: unknown): Promise<MessageMap[K]["response"]> => {
+      if (!(err instanceof NoListenerError)) {
+        throw err;
+      }
+
+      // After a navigation (e.g. bfcache eviction), the old content script
+      // is gone. Clear the injection guard so we can re-inject.
+      injectedTabs.delete(tabId);
+
+      console.log(
+        `[PortSmith] Content script not found in tab ${tabId}, injecting programmatically...`,
+      );
+      injectedTabs.add(tabId);
+      await injectContentScript(tabId);
+      await new Promise<void>((r) => setTimeout(r, 500));
+
+      return sendTabMessage(tabId, name, ...args);
+    },
+  );
 }
 
 // ─── Receive ─────────────────────────────────────────────────

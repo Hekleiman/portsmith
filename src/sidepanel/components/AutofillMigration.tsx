@@ -23,6 +23,8 @@ function StepRow({ title, status }: StepRowProps): React.JSX.Element {
     failed: "\u2717",  // ✗
     fallback: "\u26A0", // ⚠
     skipped: "\u2014",  // —
+    clipboard: "\u2398",
+    navigate_failed: "\u2717",
   };
 
   const color: Record<AutofillStepStatus, string> = {
@@ -32,6 +34,8 @@ function StepRow({ title, status }: StepRowProps): React.JSX.Element {
     failed: "text-red-500",
     fallback: "text-amber-500",
     skipped: "text-gray-300",
+    clipboard: "text-blue-500",
+    navigate_failed: "text-red-500 animate-pulse",
   };
 
   return (

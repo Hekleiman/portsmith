@@ -6,13 +6,11 @@ import StatusBadge, {
   type StatusVariant,
 } from "./components/StatusBadge";
 
-function openSidePanel(): void {
-  chrome.runtime.sendMessage({ type: "OPEN_SIDE_PANEL" });
-}
-
-function openSidePanelToComplete(): void {
-  // Open side panel — the wizard will show the complete page based on state
-  chrome.runtime.sendMessage({ type: "OPEN_SIDE_PANEL" });
+async function openSidePanel(): Promise<void> {
+  const window = await chrome.windows.getLastFocused();
+  if (window.id !== undefined) {
+    await chrome.sidePanel.open({ windowId: window.id });
+  }
 }
 
 function deriveVariant(phase: OrchestratorStatus["phase"]): StatusVariant {
@@ -162,7 +160,7 @@ export default function App(): React.JSX.Element {
 
         {isComplete && (
           <button
-            onClick={openSidePanelToComplete}
+            onClick={openSidePanel}
             className="w-full rounded-md bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700 active:bg-green-800"
           >
             View Summary

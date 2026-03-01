@@ -30,11 +30,11 @@ export default function WizardLayout({
   const showBack = !isFirstPhase;
 
   return (
-    <div className="flex h-screen w-[400px] flex-col bg-white">
+    <div className="flex h-screen w-full flex-col bg-white">
       {/* Header */}
       <header className="border-b border-gray-200 px-4 py-3">
         <div className="flex items-center justify-between">
-          <h1 className="text-lg font-bold text-gray-900">Portsmith</h1>
+          <h1 className="text-lg font-bold text-gray-900">PortSmith</h1>
           <button
             onClick={reset}
             className="text-xs text-gray-400 hover:text-gray-600"

@@ -14,6 +14,7 @@ import type {
 } from "@/core/adapters/types";
 import type {
   ExtractedCustomGPT,
+  ExtractedChatGPTProject,
   ExtractedCustomInstructions,
   ExtractedMemoryItem,
 } from "@/core/adapters/chatgpt-dom-types";
@@ -28,6 +29,7 @@ import { mapMemoryItems } from "./memory-mapper";
 
 export interface ChatGPTDOMData {
   customGPTs?: ExtractedCustomGPT[];
+  projects?: ExtractedChatGPTProject[];
   memory?: ExtractedMemoryItem[];
   customInstructions?: ExtractedCustomInstructions | null;
 }
@@ -426,6 +428,63 @@ function buildWorkspaceFromGPT(
   };
 }
 
+// ─── Workspace from ChatGPT Project ─────────────────────────
+
+function buildWorkspaceFromProject(
+  project: ExtractedChatGPTProject,
+): Workspace {
+  const translation = translateForClaude(project.instructions);
+  const capabilities = mapCapabilities(project.instructions);
+  const knowledgeFiles = mapKnowledgeFileNames(project.knowledgeFileNames);
+  const category = categorizeWorkspace(project.name, project.instructions, []);
+
+  const capWarnings = generateCapabilityWarnings(
+    detectCapabilities(project.instructions),
+  );
+
+  const manualSteps: string[] = [];
+  if (knowledgeFiles.length > 0) {
+    manualSteps.push(
+      `Upload ${knowledgeFiles.length} knowledge file(s) to project`,
+    );
+  }
+
+  // Projects map directly to Claude Projects — higher base confidence
+  const baseConfidence = calculateConfidence(
+    project.instructions,
+    knowledgeFiles,
+    capabilities,
+  );
+  // Boost confidence by 0.05 (capped at 1) because project→project is a direct mapping
+  const confidence = Math.min(1, Math.round((baseConfidence + 0.05) * 100) / 100);
+
+  return {
+    id: `ws-proj-${project.id}`,
+    sourceId: project.id,
+    name: project.name,
+    description: project.description,
+    instructions: {
+      raw: project.instructions,
+      ...(translation.rulesApplied.length > 0
+        ? { translated: { claude: translation.translated } }
+        : {}),
+    },
+    knowledgeFiles,
+    category,
+    tags: ["chatgpt-project"],
+    behavior: {},
+    capabilities,
+    conversationCount: project.conversationCount,
+    lastActiveAt: new Date().toISOString(),
+    sampleTopics: [],
+    migration: {
+      confidence,
+      warnings: capWarnings,
+      manualStepsRequired: manualSteps,
+    },
+  };
+}
+
 // ─── Global Instructions ─────────────────────────────────────
 
 function buildGlobalInstructions(
@@ -458,8 +517,16 @@ export function generateManifest(
 ): PortsmithManifest {
   const now = new Date().toISOString();
 
-  // Build workspaces from DOM-extracted GPT configs
+  // Build workspaces from DOM-extracted GPT configs and Projects
   const workspaces: Workspace[] = [];
+
+  // Projects first — they map directly to Claude Projects
+  if (domData?.projects) {
+    for (const project of domData.projects) {
+      workspaces.push(buildWorkspaceFromProject(project));
+    }
+  }
+
   if (domData?.customGPTs) {
     for (const gpt of domData.customGPTs) {
       workspaces.push(
@@ -478,7 +545,7 @@ export function generateManifest(
   );
 
   // Determine export method
-  const hasDOM = domData && (domData.customGPTs || domData.memory || domData.customInstructions);
+  const hasDOM = domData && (domData.customGPTs || domData.projects || domData.memory || domData.customInstructions);
   const exportMethod = hasDOM ? "dom_extraction" : "official_export";
 
   return {

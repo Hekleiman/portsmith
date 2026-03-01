@@ -4,6 +4,7 @@ import type {
   MigrationStep,
   MigrationStepFallback,
   MigrationGuidedInstructions,
+  InstructionsDelivery,
 } from "@/shared/messaging";
 import { onMessage } from "@/shared/messaging";
 import { autofillWorkspace } from "@/core/adapters/claude-autofill";
@@ -38,6 +39,7 @@ class MigrationOrchestrator {
   private pendingConfirmStepId: string | null = null;
   private guidedInstructions: MigrationGuidedInstructions | null = null;
   private memorySteps: MigrationStepFallback[] = [];
+  private instructionsDelivery: Record<string, InstructionsDelivery> = {};
 
   // Resolvers for async coordination
   private confirmResolver: ((confirmed: boolean) => void) | null = null;
@@ -103,6 +105,9 @@ class MigrationOrchestrator {
     this.workspaceIds = snap.selectedWorkspaceIds;
     this.completedWorkspaceIds = [...snap.completedWorkspaceIds];
     this.currentWorkspaceIndex = ckpt.workspaceIndex;
+    this.instructionsDelivery = snap.instructionsDelivery
+      ? { ...snap.instructionsDelivery }
+      : {};
     this.phase = "running";
     this.memorySteps = generateMemoryInstructions(this.manifest.memory);
 
@@ -122,6 +127,32 @@ class MigrationOrchestrator {
 
   getStatus(): OrchestratorStatus {
     const ws = this.getCurrentWorkspace();
+    const instr = ws
+      ? (ws.instructions.translated?.claude ?? ws.instructions.raw)
+      : null;
+
+    // Build clipboard instructions map for workspaces that fell back
+    const clipboardInstructions: Record<string, string> = {};
+    if (this.manifest) {
+      for (const [wsId, delivery] of Object.entries(
+        this.instructionsDelivery,
+      )) {
+        if (delivery === "clipboard") {
+          const workspace = this.manifest.workspaces.find(
+            (w) => w.id === wsId,
+          );
+          if (workspace) {
+            const text =
+              workspace.instructions.translated?.claude ??
+              workspace.instructions.raw;
+            if (text.length > 0) {
+              clipboardInstructions[wsId] = text;
+            }
+          }
+        }
+      }
+    }
+
     return {
       phase: this.phase,
       mode: this.mode,
@@ -135,6 +166,10 @@ class MigrationOrchestrator {
       guidedInstructions: this.guidedInstructions,
       memorySteps: this.memorySteps,
       hasMemory: this.memorySteps.length > 0,
+      instructionsDelivery: { ...this.instructionsDelivery },
+      currentWorkspaceInstructions:
+        instr && instr.length > 0 ? instr : null,
+      clipboardInstructions,
     };
   }
 
@@ -161,6 +196,15 @@ class MigrationOrchestrator {
     return true;
   }
 
+  updateDelivery(
+    workspaceId: string,
+    delivery: InstructionsDelivery,
+  ): boolean {
+    if (!(workspaceId in this.instructionsDelivery)) return false;
+    this.instructionsDelivery[workspaceId] = delivery;
+    return true;
+  }
+
   // ─── Private ───────────────────────────────────────────────
 
   private getCurrentWorkspace(): Workspace | null {
@@ -181,6 +225,27 @@ class MigrationOrchestrator {
 
       const all = await chrome.tabs.query({ url: "https://claude.ai/*" });
       if (all.length > 0 && all[0]?.id != null) return all[0].id;
+    } catch {
+      // Not in extension context
+    }
+    return null;
+  }
+
+  /**
+   * Find a tab for autofill: prefer an existing Claude tab, but fall back to
+   * the active tab. The autofill navigate step will redirect it to claude.ai.
+   */
+  private async getTabForAutofill(): Promise<number | null> {
+    const claudeTab = await this.findClaudeTab();
+    if (claudeTab !== null) return claudeTab;
+
+    // No Claude tab — use the active tab (navigate step will redirect it)
+    try {
+      const [activeTab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
+      if (activeTab?.id != null) return activeTab.id;
     } catch {
       // Not in extension context
     }
@@ -245,11 +310,11 @@ class MigrationOrchestrator {
   }
 
   private async processAutofillWorkspace(workspace: Workspace): Promise<void> {
-    const tabId = await this.findClaudeTab();
+    const tabId = await this.getTabForAutofill();
     if (tabId === null) {
-      const error = "No Claude tab found. Please open claude.ai first.";
+      const error = "No browser tab available for migration.";
       console.warn(
-        `[Portsmith] Workspace "${workspace.name}" failed: ${error}`,
+        `[PortSmith] Workspace "${workspace.name}" failed: ${error}`,
       );
       this.failedWorkspaces.push({
         id: workspace.id,
@@ -261,6 +326,12 @@ class MigrationOrchestrator {
 
     this.currentSteps = [];
     const isHybrid = this.mode === "hybrid";
+
+    // Initialize instructions delivery tracking
+    const instructions =
+      workspace.instructions.translated?.claude ?? workspace.instructions.raw;
+    this.instructionsDelivery[workspace.id] =
+      instructions.length > 0 ? "pending" : "none";
 
     try {
       const gen = autofillWorkspace(workspace, tabId, { hybrid: isHybrid });
@@ -275,6 +346,11 @@ class MigrationOrchestrator {
         nextInput = undefined;
 
         const step: MigrationStep = value;
+
+        // Track instructions delivery from step results
+        if (step.instructionsDelivery) {
+          this.instructionsDelivery[workspace.id] = step.instructionsDelivery;
+        }
 
         // Hybrid: pause at pending status for user confirmation
         if (isHybrid && step.status === "pending") {
@@ -292,14 +368,43 @@ class MigrationOrchestrator {
           continue;
         }
 
+        // Navigate failed: pause and wait for user to navigate manually
+        if (step.status === "navigate_failed") {
+          this.pendingConfirmStepId = step.id;
+          this.updateStep(step);
+
+          const confirmed = await new Promise<boolean>((resolve) => {
+            this.confirmResolver = resolve;
+          });
+          this.confirmResolver = null;
+          this.pendingConfirmStepId = null;
+
+          if (this.cancelRequested) return;
+          nextInput = confirmed;
+          continue;
+        }
+
         this.updateStep(step);
       }
 
-      this.completedWorkspaceIds.push(workspace.id);
+      // Check if the generator ended with a blocking failure
+      const lastStep = this.currentSteps[this.currentSteps.length - 1];
+      if (
+        lastStep?.status === "failed" ||
+        lastStep?.status === "navigate_failed"
+      ) {
+        this.failedWorkspaces.push({
+          id: workspace.id,
+          name: workspace.name,
+          error: lastStep.title,
+        });
+      } else {
+        this.completedWorkspaceIds.push(workspace.id);
+      }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       console.warn(
-        `[Portsmith] Workspace "${workspace.name}" failed: ${errorMsg}`,
+        `[PortSmith] Workspace "${workspace.name}" failed: ${errorMsg}`,
       );
       this.failedWorkspaces.push({
         id: workspace.id,
@@ -331,6 +436,7 @@ class MigrationOrchestrator {
       selectedWorkspaceIds: this.workspaceIds,
       completedWorkspaceIds: this.completedWorkspaceIds,
       errors: this.failedWorkspaces.map((f) => `${f.name}: ${f.error}`),
+      instructionsDelivery: { ...this.instructionsDelivery },
     };
 
     await saveCheckpoint(snapshot, this.currentWorkspaceIndex, 0);
@@ -350,6 +456,7 @@ class MigrationOrchestrator {
     this.guidedInstructions = null;
     this.guidedResolver = null;
     this.memorySteps = [];
+    this.instructionsDelivery = {};
     this.cancelRequested = false;
     this.pauseRequested = false;
     this.pauseResolver = null;
@@ -397,6 +504,15 @@ export function registerOrchestratorHandlers(): void {
 
   onMessage("MIGRATION_MEMORY_DONE", () => {
     return { success: orchestrator.markMemoryDone() };
+  });
+
+  onMessage("MIGRATION_UPDATE_DELIVERY", (payload) => {
+    return {
+      success: orchestrator.updateDelivery(
+        payload.workspaceId,
+        payload.delivery,
+      ),
+    };
   });
 }
 

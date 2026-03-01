@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Portsmith Privacy Policy</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.7;
+      color: #1a1a1a;
+      background: #fafafa;
+    }
+
+    .container {
+      max-width: 680px;
+      margin: 0 auto;
+      padding: 48px 24px 80px;
+    }
+
+    header {
+      margin-bottom: 40px;
+      padding-bottom: 24px;
+      border-bottom: 1px solid #e5e5e5;
+    }
+
+    header h1 {
+      font-size: 28px;
+      font-weight: 700;
+      color: #111;
+      margin-bottom: 4px;
+    }
+
+    header .subtitle {
+      font-size: 15px;
+      color: #666;
+    }
+
+    .effective-date {
+      font-size: 13px;
+      color: #888;
+      margin-top: 8px;
+    }
+
+    h2 {
+      font-size: 20px;
+      font-weight: 600;
+      color: #111;
+      margin-top: 36px;
+      margin-bottom: 12px;
+    }
+
+    p {
+      margin-bottom: 14px;
+      font-size: 15px;
+      color: #333;
+    }
+
+    ul, ol {
+      margin-bottom: 14px;
+      padding-left: 24px;
+    }
+
+    li {
+      font-size: 15px;
+      color: #333;
+      margin-bottom: 6px;
+    }
+
+    strong {
+      font-weight: 600;
+      color: #111;
+    }
+
+    code {
+      font-family: "SF Mono", "Fira Code", "Fira Mono", Menlo, Consolas, monospace;
+      font-size: 13px;
+      background: #f0f0f0;
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 16px;
+      font-size: 14px;
+    }
+
+    th, td {
+      text-align: left;
+      padding: 10px 12px;
+      border-bottom: 1px solid #e5e5e5;
+    }
+
+    th {
+      font-weight: 600;
+      color: #111;
+      background: #f5f5f5;
+    }
+
+    td {
+      color: #333;
+    }
+
+    footer {
+      margin-top: 48px;
+      padding-top: 24px;
+      border-top: 1px solid #e5e5e5;
+      font-size: 13px;
+      color: #888;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Portsmith &mdash; Privacy Policy</h1>
+      <p class="subtitle">Chrome Extension for AI Assistant Migration</p>
+      <p class="effective-date">Effective date: March 1, 2026</p>
+    </header>
+
+    <h2>What Portsmith Does</h2>
+    <p>
+      Portsmith is a Chrome extension that helps you migrate your AI assistant configurations &mdash; such as projects, custom GPTs, memory, and custom instructions &mdash; from ChatGPT to Claude. All processing happens entirely on your device. Portsmith does not send your data to any remote server.
+    </p>
+
+    <h2>What Data Is Accessed</h2>
+    <p>
+      Portsmith reads data from <strong>chatgpt.com</strong> and interacts with <strong>claude.ai</strong> to perform the migration. Here is exactly what is accessed on each platform:
+    </p>
+
+    <p><strong>Read from ChatGPT (chatgpt.com):</strong></p>
+    <ul>
+      <li><strong>Custom GPT configurations:</strong> name, description, system instructions, conversation starters, and knowledge file names</li>
+      <li><strong>Projects:</strong> name, description, project instructions, and knowledge file names</li>
+      <li><strong>Memory items:</strong> the text content of each saved memory entry</li>
+      <li><strong>Custom instructions:</strong> your "about you" text and response preference text</li>
+      <li><strong>Session token:</strong> your existing ChatGPT session token is used temporarily (in-memory only, never stored to disk) to authenticate API calls to ChatGPT's own backend for reading project data</li>
+    </ul>
+
+    <p><strong>Written to Claude (claude.ai):</strong></p>
+    <ul>
+      <li><strong>Project creation forms:</strong> project name and description</li>
+      <li><strong>Project instructions:</strong> translated instruction text entered into the instructions field</li>
+      <li><strong>Clipboard:</strong> when automatic form-filling fails, instructions are copied to your clipboard so you can paste them manually</li>
+    </ul>
+
+    <p>
+      Portsmith does not read your conversation history, uploaded files' contents, billing information, account credentials, or any data unrelated to AI assistant configurations.
+    </p>
+
+    <h2>What Data Is Stored Locally</h2>
+    <p>
+      All data stays on your device. Portsmith uses two local storage mechanisms provided by Chrome:
+    </p>
+
+    <p><strong>IndexedDB</strong> (via the Dexie.js library):</p>
+    <ul>
+      <li><strong>Migration manifests:</strong> a structured representation of your extracted configurations (the same data listed above), used to display the review screen and drive the import process</li>
+      <li><strong>File records:</strong> metadata and blobs for any files involved in the migration</li>
+      <li><strong>Checkpoints:</strong> snapshots of migration progress (which step you're on, which workspaces are completed) so you can resume an interrupted migration</li>
+    </ul>
+
+    <p><strong>chrome.storage.local:</strong></p>
+    <ul>
+      <li><strong>User preferences:</strong> LLM mode setting, last-used source and target platforms, sidebar display state</li>
+      <li><strong>Guided migration progress:</strong> which migration steps you've marked as completed</li>
+    </ul>
+
+    <p>
+      No data is stored in any cloud service, synced across devices, or made accessible to any third party.
+    </p>
+
+    <h2>What Data Is Transmitted</h2>
+    <p>
+      <strong>None.</strong> Portsmith does not operate any remote servers. There is no analytics, no telemetry, no crash reporting, no usage tracking, and no data collection of any kind.
+    </p>
+    <p>
+      The only network requests Portsmith initiates are same-origin API calls made within the ChatGPT tab (to <code>chatgpt.com/api/auth/session</code> and <code>chatgpt.com/backend-api/gizmos/...</code>) to read your project data using your existing authenticated session. These requests go directly from your browser to ChatGPT's servers &mdash; Portsmith has no servers that sit in between.
+    </p>
+
+    <h2>Permissions and Why They're Needed</h2>
+    <p>
+      Portsmith requests only the permissions required for its core functionality:
+    </p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Permission</th>
+          <th>Why it's needed</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>storage</code></td>
+          <td>Save user preferences and guided migration progress to <code>chrome.storage.local</code>. This is a local-only storage API &mdash; no data leaves your device.</td>
+        </tr>
+        <tr>
+          <td><code>sidePanel</code></td>
+          <td>Display the migration wizard in Chrome's Side Panel, which stays open alongside ChatGPT and Claude pages during the migration process.</td>
+        </tr>
+        <tr>
+          <td><code>scripting</code></td>
+          <td>Execute small scripts in the context of ChatGPT pages to read your session token and project data via ChatGPT's same-origin API, and to perform trusted click events on Claude's UI during autofill.</td>
+        </tr>
+        <tr>
+          <td><code>clipboardWrite</code></td>
+          <td>Copy translated instructions to your clipboard as a fallback when automatic form-filling cannot complete.</td>
+        </tr>
+        <tr>
+          <td><code>windows</code></td>
+          <td>Bring the browser window containing the Claude tab to the foreground during the autofill process so you can see the migration happening.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p><strong>Host permissions:</strong></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Host pattern</th>
+          <th>Why it's needed</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>https://chatgpt.com/*</code></td>
+          <td>Inject the content script that reads your Custom GPT, Project, Memory, and Custom Instructions data from the ChatGPT DOM and API.</td>
+        </tr>
+        <tr>
+          <td><code>https://claude.ai/*</code></td>
+          <td>Inject the content script that fills Claude project creation forms, enters instructions, and verifies created projects.</td>
+        </tr>
+        <tr>
+          <td><code>https://chat.openai.com/*</code> (optional)</td>
+          <td>Requested only if you grant it &mdash; provides compatibility with the legacy ChatGPT domain.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Third-Party Services</h2>
+    <p>
+      Portsmith does not use any third-party services. There are no analytics providers, no advertising networks, no external APIs, and no server-side components. The extension is entirely self-contained.
+    </p>
+
+    <h2>Data Retention and Deletion</h2>
+    <p>
+      All data Portsmith stores remains on your device in your browser's local storage. It persists until:
+    </p>
+    <ul>
+      <li>You uninstall the Portsmith extension, which removes all stored data automatically</li>
+      <li>You clear your browser's site data or extension storage</li>
+      <li>You complete a migration and the extension clears its checkpoints</li>
+    </ul>
+    <p>
+      There is no remote data to delete because no data is ever transmitted off your device.
+    </p>
+
+    <h2>Children's Privacy</h2>
+    <p>
+      Portsmith is not directed at children under the age of 13. The extension is a productivity tool intended for users who have existing accounts on ChatGPT and Claude.
+    </p>
+
+    <h2>Changes to This Policy</h2>
+    <p>
+      If this privacy policy is updated, the changes will be reflected on this page with a revised effective date. We encourage you to review this page periodically.
+    </p>
+
+    <h2>Contact</h2>
+    <p>
+      If you have questions about this privacy policy or Portsmith's data practices, contact us at:<br>
+      <strong>privacy@portsmith.dev</strong>
+    </p>
+
+    <footer>
+      <p>Portsmith v0.1.0 &mdash; Privacy Policy &mdash; Last updated March 1, 2026</p>
+    </footer>
+  </div>
+</body>
+</html>

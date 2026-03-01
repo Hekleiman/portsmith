@@ -1,9 +1,65 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useMigrationStore } from "../store/migration-store";
 import { loadManifest } from "@/core/storage/indexed-db";
 import type { PortsmithManifest } from "@/core/schema/types";
 import WorkspaceCard from "../components/WorkspaceCard";
 import MemoryList from "../components/MemoryList";
+
+// ─── Select All / Deselect All ──────────────────────────────
+
+interface SelectAllToggleProps {
+  totalIds: string[];
+  selectedIds: string[];
+  onChangeAll: (ids: string[]) => void;
+}
+
+function SelectAllToggle({
+  totalIds,
+  selectedIds,
+  onChangeAll,
+}: SelectAllToggleProps): React.JSX.Element {
+  const checkboxRef = useRef<HTMLInputElement>(null);
+  const totalCount = totalIds.length;
+  const selectedCount = selectedIds.length;
+  const allSelected = selectedCount === totalCount;
+  const noneSelected = selectedCount === 0;
+
+  useEffect(() => {
+    if (checkboxRef.current) {
+      checkboxRef.current.indeterminate = !allSelected && !noneSelected;
+    }
+  }, [allSelected, noneSelected]);
+
+  const handleToggle = (): void => {
+    if (allSelected || !noneSelected) {
+      // Some or all selected → deselect all
+      onChangeAll([]);
+    } else {
+      // None selected → select all
+      onChangeAll(totalIds);
+    }
+  };
+
+  return (
+    <label className="mt-2 flex cursor-pointer items-center gap-2 border-b border-gray-100 pb-2">
+      <input
+        ref={checkboxRef}
+        type="checkbox"
+        checked={allSelected}
+        onChange={handleToggle}
+        className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+        aria-label="Select all workspaces"
+      />
+      <span className="text-sm text-gray-600">
+        {allSelected
+          ? "Deselect all"
+          : noneSelected
+            ? `Select all (${totalCount})`
+            : `${selectedCount} of ${totalCount} selected`}
+      </span>
+    </label>
+  );
+}
 
 export default function Review(): React.JSX.Element {
   const manifestId = useMigrationStore((s) => s.manifestId);
@@ -166,6 +222,14 @@ export default function Review(): React.JSX.Element {
       {/* Workspaces */}
       <section className="mt-4">
         <h3 className="text-sm font-medium text-gray-700">Workspaces</h3>
+
+        {/* Select all / Deselect all toggle */}
+        <SelectAllToggle
+          totalIds={manifest.workspaces.map((w) => w.id)}
+          selectedIds={selectedIds}
+          onChangeAll={setSelectedWorkspaceIds}
+        />
+
         <div className="mt-2 space-y-2">
           {manifest.workspaces.map((ws) => (
             <WorkspaceCard
