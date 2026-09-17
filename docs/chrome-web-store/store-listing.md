@@ -30,7 +30,7 @@ If you've built custom GPTs or projects in ChatGPT, projects in Claude, or Gems 
 WHAT PORTSMITH MOVES
 
 - From ChatGPT: custom GPTs, projects with their instructions and knowledge files, saved memories and custom instructions
-- From Claude: projects with their instructions, knowledge documents and project memory
+- From Claude: projects with their instructions, knowledge documents and project memory, plus your memory outside projects and your "Instructions for Claude" preferences
 - From Gemini: Gems with their instructions
 - Project memory: what the assistant learned from chats inside a project comes along as a document in the new project
 
@@ -82,6 +82,7 @@ GOOD TO KNOW
 - Fixed: instruction adjustments could change their meaning
 - New: project memory moves with each project
 - New: memories and custom instructions go through Claude's and Gemini's memory import
+- New: when Claude is the source, your memory outside projects and your "Instructions for Claude" can come along too
 - New: step-by-step migration into ChatGPT
 - New: files the target can't take are offered as downloads
 - New: resuming never duplicates work, and Stop stops right away

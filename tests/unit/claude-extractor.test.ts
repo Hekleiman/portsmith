@@ -39,7 +39,7 @@ import {
   isGlobalMemoryPath,
   toMemoryEntry,
 } from "@/content-scripts/claude/extractor";
-import { generateClaudeManifest, memoryNoteToFact } from "@/core/transform/claude-manifest";
+import { generateClaudeManifest } from "@/core/transform/claude-manifest";
 import { buildMemoryStepsForTarget } from "@/core/adapters/memory-steps";
 import { getOrgId } from "@/content-scripts/claude/api";
 
@@ -390,7 +390,7 @@ describe("generateClaudeManifest: global memory and preferences", () => {
       preferences: "  Answer in British English. ",
     });
     expect(manifest.memory.map((m) => m.fact).sort()).toEqual(
-      ["Global summary", "Profile: Lives in Lisbon Works as a nurse"].sort(),
+      ["Global summary", "Lives in Lisbon", "Works as a nurse"].sort(),
     );
     expect(manifest.memory.every((m) => m.workspaceIds.length === 0)).toBe(true);
     expect(manifest.globalInstructions).toBe("Answer in British English.");
@@ -422,16 +422,10 @@ describe("generateClaudeManifest: global memory and preferences", () => {
     });
     const steps = buildMemoryStepsForTarget(manifest, "gemini");
     const pasted = steps.flatMap((st) => st.copyBlocks.map((b) => b.content)).join("\n");
-    expect(pasted).toContain("Profile: Lives in Lisbon Works as a nurse");
+    expect(pasted).toMatch(/^- Lives in Lisbon$/m);
+    expect(pasted).toMatch(/^- Works as a nurse$/m);
     expect(pasted).toContain("Answer in British English.");
     expect(pasted).not.toContain("We fly to Rome.");
-  });
-
-  it("turns a note into one fact", () => {
-    const note = { path: "/x.md", title: "Diet", summary: "Food", body: "## Likes\n1. Pasta\n* Olives", updatedAt: "" };
-    expect(memoryNoteToFact(note)).toBe("Diet: Likes Pasta Olives");
-    expect(memoryNoteToFact({ ...note, body: "" })).toBe("Diet: Food");
-    expect(memoryNoteToFact({ ...note, body: "", summary: "" })).toBe("Diet");
   });
 });
 

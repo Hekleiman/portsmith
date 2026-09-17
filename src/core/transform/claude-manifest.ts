@@ -129,16 +129,32 @@ export function buildWorkspaceFromProject(
 
 // ─── Global memory ──────────────────────────────────────────
 
-/** One memory fact from a note: its title, then its lines joined up. */
-export function memoryNoteToFact(note: ExtractedClaudeMemoryEntry): string {
-  const text = (note.body || note.summary)
-    .split("\n")
-    .map((line) => line.replace(/^\s*(?:[-*+]|#{1,6}|\d+\.)\s+/, "").trim())
-    .filter(Boolean)
-    .join(" ");
-  const title = note.title.trim();
-  if (!text) return title;
-  return title ? `${title}: ${text}` : text;
+const HEADING_LINE = /^\s*#{1,6}(?:\s|$)/;
+const LIST_MARKER = /^\s*(?:[-*+]|\d+[.)])\s+/;
+/** Claude's own labels at the start of a line, such as "[stated]". */
+const INTERNAL_TAG = /^\[[a-z_ -]+\]\s*/i;
+/** Notes about one person or area: each line needs the note's name. */
+const NAMED_NOTE_PATH = /^\/(?:people|areas)\//i;
+
+/**
+ * One memory fact per line of a note. Headings are dropped, list markers
+ * and internal tags removed, and lines of people and area notes get the
+ * note's title in front so they still make sense on their own.
+ */
+export function memoryNoteToFacts(note: ExtractedClaudeMemoryEntry): string[] {
+  const prefix =
+    NAMED_NOTE_PATH.test(note.path) && note.title.trim()
+      ? `${note.title.trim()}: `
+      : "";
+  const facts: string[] = [];
+  for (const raw of (note.body || note.summary).split("\n")) {
+    if (HEADING_LINE.test(raw)) continue;
+    let line = raw.replace(LIST_MARKER, "").trim();
+    while (INTERNAL_TAG.test(line)) line = line.replace(INTERNAL_TAG, "");
+    line = line.trim();
+    if (line) facts.push(prefix + line);
+  }
+  return facts;
 }
 
 // ─── Public API ─────────────────────────────────────────────
@@ -156,7 +172,7 @@ export function generateClaudeManifest(
   global: ClaudeGlobalData = {},
 ): PortsmithManifest {
   const now = new Date().toISOString();
-  const memory = mapMemoryItems((global.memory ?? []).map(memoryNoteToFact));
+  const memory = mapMemoryItems((global.memory ?? []).flatMap(memoryNoteToFacts));
 
   const workspaces = projects.map((p) => buildWorkspaceFromProject(p, now));
 

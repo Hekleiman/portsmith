@@ -39,7 +39,7 @@ PortSmith's content script on chatgpt.com reads what the user asked to move: cus
 
 PortSmith runs two content scripts on claude.ai.
 
-- **Extractor:** reads the user's Claude projects through Claude's same-origin API: name, description, instructions, knowledge documents, and project memory if the user asks for it.
+- **Extractor:** reads the user's Claude projects through Claude's same-origin API: name, description, instructions, knowledge documents, and project memory if the user asks for it. If the user leaves "Your memory and preferences" on, it also reads the memory Claude keeps outside projects and the "Instructions for Claude" preferences from the account settings. All of these are read-only.
 - **Importer:** when Claude is the target, it creates projects, sets their instructions, adds knowledge documents and files, and adds a project memory document. It then reads the projects back to confirm they were created.
 
 The organization ID comes from Claude's `lastActiveOrg` cookie. Claude navigates on the client side, so the scripts need the whole domain.
