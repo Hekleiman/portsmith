@@ -57,6 +57,11 @@ export interface MigrationStateSnapshot {
   filesDelivered?: Record<string, number>;
   /** Workspaces whose project memory reached the target */
   projectMemoryWorkspaceIds?: string[];
+  /** Knowledge to add by hand after the run, per workspace */
+  knowledgeLeftovers?: Record<
+    string,
+    { link: string; fileNames: string[]; projectMemory: boolean }
+  >;
   /** Whether the user finished the memory import steps */
   memoryImported?: boolean;
 }

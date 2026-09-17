@@ -29,6 +29,7 @@ const h = vi.hoisted(() => {
     /** Per-workspace script for the fake autofill generator. */
     autofillScript: (_wsId: string): Step[] => [],
     answers: [] as Array<boolean | undefined>,
+    files: new Map<string, { blob: string; mimeType: string }>(),
   };
 });
 
@@ -41,6 +42,7 @@ vi.mock("@/shared/messaging", () => ({
 }));
 
 vi.mock("@/core/storage/indexed-db", () => ({
+  loadFile: vi.fn(async (id: string) => h.files.get(id)),
   loadManifest: vi.fn(async (id: string) => h.manifests.get(id)),
   saveCheckpoint: vi.fn(async (state: MigrationStateSnapshot, workspaceIndex: number) => {
     h.checkpoints.push({ state: structuredClone(state), workspaceIndex });
@@ -177,6 +179,9 @@ function geminiTab(
       };
     }
     if (name === "GEMINI_CREATE_GEM") return create((payload as { name: string }).name);
+    if (name === "GEMINI_UPLOAD_KNOWLEDGE_FILE") {
+      return { success: true, handle: `$h-${(payload as { fileName: string }).fileName}` };
+    }
     return { success: true };
   };
 }
@@ -187,6 +192,7 @@ beforeEach(() => {
   h.tabMessages.length = 0;
   h.autofillCalls.length = 0;
   h.answers.length = 0;
+  h.files.clear();
   h.tabResponder = geminiTab();
   h.autofillScript = created;
   vi.clearAllMocks();
@@ -415,11 +421,28 @@ describe("MigrationOrchestrator: Gemini target", () => {
     expect(h.checkpoints.some((c) => c.state.createdWorkspaceIds?.includes("a"))).toBe(true);
   });
 
-  it("offers the manual route when Gemini rejects the request", async () => {
+  it("keeps going when Gemini rejects a Gem, and lists it at the end", async () => {
+    putManifest("m1", [ws("a"), ws("b")]);
+    h.tabResponder = geminiTab([], (name) =>
+      name === "Workspace a" ? { success: false, error: "HTTP 400" } : { success: true, gemId: "gem-b" },
+    );
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "autofill", ["a", "b"], "gemini");
+    await finishGeminiRun(o);
+    const status = o.getStatus();
+    expect(status.completedWorkspaceIds).toEqual(["b"]);
+    expect(status.manualWorkspaces).toEqual([
+      { id: "a", name: "Workspace a", reason: "Not created in Gemini (HTTP 400)" },
+    ]);
+  });
+
+  it("offers the manual route in hybrid mode when Gemini rejects the request", async () => {
     putManifest("m1", [ws("a"), ws("b")]);
     h.tabResponder = geminiTab([], () => ({ success: false, error: "HTTP 400" }));
     const o = new MigrationOrchestrator();
-    await o.start("m1", "autofill", ["a", "b"], "gemini");
+    await o.start("m1", "hybrid", ["a", "b"], "gemini");
+    await waitFor(() => o.getStatus().pendingConfirmStepId === "a-create");
+    o.confirmStep(true, token(o));
 
     await waitFor(() => o.getStatus().pendingConfirmStepId === "a-create");
     const step = o.getStatus().currentSteps.find((s) => s.id === "a-create");
@@ -428,7 +451,13 @@ describe("MigrationOrchestrator: Gemini target", () => {
     o.confirmStep(true);
 
     await waitFor(() => o.getStatus().pendingConfirmStepId === "b-create");
-    o.confirmStep(false);
+    o.confirmStep(true, token(o));
+    await waitFor(
+      () =>
+        o.getStatus().pendingConfirmStepId === "b-create" &&
+        o.getStatus().currentSteps[0]?.confirmLabel === "It's in Gemini now",
+    );
+    o.confirmStep(false, token(o));
 
     await finishGeminiRun(o);
     const status = o.getStatus();
@@ -545,9 +574,10 @@ describe("MigrationOrchestrator: follow-ups", () => {
     ]);
     h.tabResponder = geminiTab([], () => ({ success: false, error: "HTTP 500" }));
     const o = new MigrationOrchestrator();
-    await o.start("m1", "autofill", ["a"], "gemini");
+    await o.start("m1", "hybrid", ["a"], "gemini");
     await waitFor(() => o.getStatus().pendingConfirmStepId === "a-create");
-    expect(o.getStatus().currentSteps[0]?.confirmLabel).toBe("It's in Gemini now");
+    o.confirmStep(true, token(o));
+    await waitFor(() => o.getStatus().currentSteps[0]?.confirmLabel === "It's in Gemini now");
     o.confirmStep(true, token(o));
     await finishGeminiRun(o);
     const status = o.getStatus();
@@ -584,11 +614,23 @@ describe("MigrationOrchestrator: follow-ups", () => {
 });
 
 describe("MigrationOrchestrator: Gemini duplicates", () => {
-  it("asks before creating a Gem whose name is taken", async () => {
+  it("skips a taken name without asking in automatic mode", async () => {
     putManifest("m1", [ws("a")]);
     h.tabResponder = geminiTab([{ id: "old", name: "workspace A" }]);
     const o = new MigrationOrchestrator();
     await o.start("m1", "autofill", ["a"], "gemini");
+    await finishGeminiRun(o);
+    expect(h.tabMessages.some((m) => m.name === "GEMINI_CREATE_GEM")).toBe(false);
+    expect(o.getStatus().manualWorkspaces[0]?.reason).toContain("already in Gemini");
+  });
+
+  it("asks before creating a Gem whose name is taken in hybrid mode", async () => {
+    putManifest("m1", [ws("a")]);
+    h.tabResponder = geminiTab([{ id: "old", name: "workspace A" }]);
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "hybrid", ["a"], "gemini");
+    await waitFor(() => o.getStatus().pendingConfirmStepId === "a-create");
+    o.confirmStep(true, token(o));
     await waitFor(() => o.getStatus().pendingConfirmStepId === "a-create");
     expect(o.getStatus().currentSteps[0]?.title).toContain("already in Gemini");
     o.confirmStep(false, token(o));
@@ -611,6 +653,117 @@ describe("MigrationOrchestrator: Gemini duplicates", () => {
     expect(status.completedWorkspaceIds).toEqual(["a"]);
     expect(status.pendingConfirmStepId).toBeNull();
     expect(h.tabMessages.filter((m) => m.name === "GEMINI_CREATE_GEM")).toHaveLength(1);
+  });
+});
+
+// ─── Gem knowledge ──────────────────────────────────────────
+
+function withKnowledge(id: string, files: string[], memory = false): Workspace {
+  for (const name of files) h.files.set(`file-${name}`, { blob: "eA==", mimeType: "text/plain" });
+  return ws(id, {
+    description: `About ${id}`,
+    knowledgeFiles: files.map((name, i) => ({
+      id: `kf-${i}`,
+      originalName: name,
+      mimeType: "text/plain",
+      sizeBytes: 1,
+      source: "exported" as const,
+      contentRef: `file-${name}`,
+      compatible: true,
+    })),
+    ...(memory
+      ? {
+          projectMemory: {
+            source: "claude_memory" as const,
+            capturedAt: "2026-09-01T00:00:00.000Z",
+            entries: [{ id: "e1", title: "Stack", content: "Uses Vite" }],
+          },
+        }
+      : {}),
+  });
+}
+
+describe("MigrationOrchestrator: Gem knowledge", () => {
+  it("adds the files and project memory to the new Gem without asking", async () => {
+    putManifest("m1", [withKnowledge("a", ["one.txt", "two.txt"], true)]);
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "autofill", ["a"], "gemini");
+    await finishGeminiRun(o);
+
+    const uploads = h.tabMessages.filter((m) => m.name === "GEMINI_UPLOAD_KNOWLEDGE_FILE");
+    expect(uploads.map((m) => (m.payload as { fileName: string }).fileName)).toEqual([
+      "project-memory-from-chatgpt.md",
+      "one.txt",
+      "two.txt",
+    ]);
+    const update = h.tabMessages.find((m) => m.name === "GEMINI_UPDATE_GEM");
+    expect(update?.payload).toEqual({
+      gemId: "gem-1",
+      name: "Workspace a",
+      description: "About a",
+      instructions: "Instructions for a",
+      knowledgeHandles: ["$h-project-memory-from-chatgpt.md", "$h-one.txt", "$h-two.txt"],
+    });
+    const status = o.getStatus();
+    expect(status.filesDelivered.a).toBe(2);
+    expect(status.projectMemoryWorkspaceIds).toEqual(["a"]);
+    expect(status.followUps.a).toBeUndefined();
+    expect(status.knowledgeLeftovers).toEqual({});
+    expect(h.answers).toEqual([]);
+  });
+
+  it("saves what uploaded and leaves the rest for the end", async () => {
+    putManifest("m1", [withKnowledge("a", ["one.txt", "big.pdf"]), ws("b")]);
+    const base = geminiTab();
+    h.tabResponder = (name, payload) =>
+      name === "GEMINI_UPLOAD_KNOWLEDGE_FILE" && (payload as { fileName: string }).fileName === "big.pdf"
+        ? { success: false, error: "File upload failed: HTTP 413" }
+        : base(name, payload);
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "autofill", ["a", "b"], "gemini");
+    await finishGeminiRun(o);
+
+    const update = h.tabMessages.find((m) => m.name === "GEMINI_UPDATE_GEM");
+    expect((update?.payload as { knowledgeHandles: string[] }).knowledgeHandles).toEqual(["$h-one.txt"]);
+    const status = o.getStatus();
+    expect(status.completedWorkspaceIds).toEqual(["a", "b"]);
+    expect(status.filesDelivered.a).toBe(1);
+    expect(status.knowledgeLeftovers.a).toEqual({
+      link: "https://gemini.google.com/u/0/gems/edit/gem-1",
+      fileNames: ["big.pdf"],
+      projectMemory: false,
+    });
+    expect(status.followUps.a).toEqual([
+      "Add 1 file to the Gem by hand (big.pdf: File upload failed: HTTP 413)",
+    ]);
+    const last = h.checkpoints[h.checkpoints.length - 1]!.state;
+    expect(last.knowledgeLeftovers?.a?.fileNames).toEqual(["big.pdf"]);
+  });
+
+  it("lists everything when saving the Gem fails", async () => {
+    putManifest("m1", [withKnowledge("a", ["one.txt"], true)]);
+    const base = geminiTab();
+    h.tabResponder = (name, payload) =>
+      name === "GEMINI_UPDATE_GEM" ? { success: false, error: "HTTP 500" } : base(name, payload);
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "autofill", ["a"], "gemini");
+    await finishGeminiRun(o);
+    const status = o.getStatus();
+    expect(status.filesDelivered.a).toBeUndefined();
+    expect(status.projectMemoryWorkspaceIds).toEqual([]);
+    expect(status.knowledgeLeftovers.a).toEqual(
+      expect.objectContaining({ fileNames: ["one.txt"], projectMemory: true }),
+    );
+    expect(status.currentSteps).toEqual([]);
+  });
+
+  it("sends nothing extra for a Gem without files", async () => {
+    putManifest("m1", [ws("a")]);
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "autofill", ["a"], "gemini");
+    await finishGeminiRun(o);
+    expect(h.tabMessages.map((m) => m.name)).not.toContain("GEMINI_UPDATE_GEM");
+    expect(h.tabMessages.map((m) => m.name)).not.toContain("GEMINI_UPLOAD_KNOWLEDGE_FILE");
   });
 });
 

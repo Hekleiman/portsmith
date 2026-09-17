@@ -25,6 +25,8 @@ export interface GeminiSession {
   language: string;
   /** Account path prefix of the tab ("/u/1"), "" for the default account */
   prefix?: string;
+  /** qKIAYe push channel, sent as the Push-ID header on file uploads */
+  pushId?: string;
 }
 
 // ─── Constants ──────────────────────────────────────────────
@@ -32,7 +34,7 @@ export interface GeminiSession {
 export const GEMINI_ORIGIN = "https://gemini.google.com";
 const BATCH_EXEC_PATH = "/_/BardChatUi/data/batchexecute";
 
-const BATCH_EXEC_HEADERS: Record<string, string> = {
+export const BATCH_EXEC_HEADERS: Record<string, string> = {
   "Content-Type": "application/x-www-form-urlencoded;charset=utf-8",
   "X-Same-Domain": "1",
   "x-goog-ext-525001261-jspb":
@@ -41,6 +43,13 @@ const BATCH_EXEC_HEADERS: Record<string, string> = {
 };
 
 let reqId = Math.floor(Math.random() * 90000) + 10000;
+
+/** Next `_reqid` value; Gemini's own page steps it by 100000 per call. */
+export function nextReqId(): number {
+  const current = reqId;
+  reqId += 100000;
+  return current;
+}
 
 // ─── Encoding ───────────────────────────────────────────────
 
@@ -184,8 +193,7 @@ export async function batchExecute(
   session: GeminiSession,
   payloads: RPCPayload[],
 ): Promise<unknown[]> {
-  const currentReqId = reqId;
-  reqId += 100000;
+  const currentReqId = nextReqId();
   // Tokens belong to one account, so the URL must carry the same prefix.
   const prefix = session.prefix ?? "";
 

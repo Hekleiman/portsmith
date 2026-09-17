@@ -37,7 +37,7 @@ WHAT PORTSMITH MOVES
 WHERE IT CAN GO
 
 - Into Claude, automatically: PortSmith creates each project, sets the instructions, uploads the files and adds the project memory, then checks the result
-- Into Gemini, automatically: PortSmith creates each Gem, then gives you the files to add to its knowledge
+- Into Gemini, automatically: PortSmith creates each Gem and adds the files and project memory to its knowledge
 - Into ChatGPT, step by step: PortSmith shows each step with copy and download buttons
 
 Your saved memories and custom instructions go through Claude's and Gemini's own memory import, in one paste.
@@ -81,6 +81,7 @@ GOOD TO KNOW
 - Fixed: knowledge file uploads to Claude
 - Fixed: instruction adjustments could change their meaning
 - New: project memory moves with each project
+- New: knowledge files and project memory go into Gems automatically
 - New: memories and custom instructions go through Claude's and Gemini's memory import
 - New: when Claude is the source, your memory outside projects and your "Instructions for Claude" can come along too
 - New: step-by-step migration into ChatGPT

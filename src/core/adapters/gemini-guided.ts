@@ -18,20 +18,49 @@ import { buildDownloads } from "./manual-fallback";
 
 export const GEMINI_GEM_MANAGER_URL = "https://gemini.google.com/gems/view";
 
+/** Gem editor URL, on the Google account the run used ("/u/1/"). */
+export function geminiGemEditUrl(gemId: string, account?: string | null): string {
+  const path = account && /^\/u\/\d+\/$/.test(account) ? account : "/";
+  return `https://gemini.google.com${path}gems/edit/${encodeURIComponent(gemId)}`;
+}
+
+export interface GemKnowledgeStepOptions {
+  stepNumber?: number;
+  /** Where the user adds the files (the Gem editor when the Gem is known) */
+  link?: string;
+  /**
+   * Only these copied files still need adding (by name), and whether the
+   * project memory document does. Omit to list everything.
+   */
+  remaining?: { fileNames: string[]; projectMemory: boolean };
+}
+
 /** Step for adding copied files and project memory to a Gem's Knowledge. */
 export function buildGemKnowledgeStep(
   workspace: Workspace,
   sourceLabel: string,
-  stepNumber?: number,
+  options: GemKnowledgeStepOptions = {},
 ): MigrationStepFallback | null {
-  const downloads = buildDownloads(workspace, sourceLabel);
+  const { stepNumber, remaining } = options;
+  const wanted = remaining ? new Set(remaining.fileNames) : null;
+  const memoryNeeded = hasProjectMemory(workspace) && (remaining?.projectMemory ?? true);
+  const scoped: Workspace = {
+    ...workspace,
+    knowledgeFiles: wanted
+      ? workspace.knowledgeFiles.filter((f) => f.contentRef && wanted.has(f.originalName))
+      : workspace.knowledgeFiles,
+    ...(memoryNeeded ? {} : { projectMemory: undefined }),
+  };
+  const downloads = buildDownloads(scoped, sourceLabel);
   const notCopied = workspace.knowledgeFiles.filter((f) => !f.contentRef);
   if (downloads.length === 0 && notCopied.length === 0) return null;
 
   const lines = [
-    'Open the Gem, find "Knowledge" and add the files below, then save the Gem.',
+    options.link
+      ? 'Open the Gem, click the "+" under "Knowledge" and add the files below, then click "Update".'
+      : 'Open the Gem, find "Knowledge" and add the files below, then save the Gem.',
   ];
-  if (hasProjectMemory(workspace)) {
+  if (memoryNeeded) {
     lines.push(
       `The project memory file holds what ${sourceLabel} remembered from chats in this project.`,
     );
@@ -51,8 +80,10 @@ export function buildGemKnowledgeStep(
     copyBlocks: [],
     downloads,
     fileNames: notCopied.map((f) => f.originalName),
-    link: GEMINI_GEM_MANAGER_URL,
-    actionHint: 'Add the files under "Knowledge", then save',
+    link: options.link ?? GEMINI_GEM_MANAGER_URL,
+    actionHint: options.link
+      ? 'Add the files under "Knowledge", then click "Update"'
+      : 'Add the files under "Knowledge", then save',
     ...(stepNumber !== undefined ? { stepNumber } : {}),
   };
 }
@@ -108,7 +139,7 @@ export function generateGeminiInstructions(
     });
   }
 
-  const knowledge = buildGemKnowledgeStep(workspace, sourceLabel, next());
+  const knowledge = buildGemKnowledgeStep(workspace, sourceLabel, { stepNumber: next() });
   if (knowledge) steps.push(knowledge);
 
   steps.push({

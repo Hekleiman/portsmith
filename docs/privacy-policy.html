@@ -163,7 +163,7 @@
     <p>Only to the platform you choose as the target, and only after you start the migration:</p>
     <ul>
       <li><strong>Claude:</strong> creates projects, sets their instructions, adds knowledge documents and files, and adds a project memory document. It then reads the new projects back to check them</li>
-      <li><strong>Gemini:</strong> creates Gems with their name, description and instructions</li>
+      <li><strong>Gemini:</strong> creates Gems with their name, description and instructions, and adds the copied knowledge files and a project memory document to each Gem's knowledge</li>
       <li><strong>ChatGPT:</strong> nothing. PortSmith shows the steps and the text to copy, and you create the projects yourself</li>
     </ul>
     <p>
@@ -187,7 +187,7 @@
 
     <h2>What PortSmith sends over the network</h2>
     <p>
-      PortSmith only talks to chatgpt.com, claude.ai and gemini.google.com, using your existing sessions, from the tabs of those sites. It has no analytics, telemetry, crash reporting or advertising, and no servers of its own.
+      PortSmith only talks to chatgpt.com, claude.ai and gemini.google.com, using your existing sessions, from the tabs of those sites. When Gemini is the target, knowledge files are uploaded from the Gemini tab to content-push.googleapis.com, the Google upload service Gemini's own page uses for files. It has no analytics, telemetry, crash reporting or advertising, and no servers of its own.
     </p>
 
     <h2>Permissions and why they are needed</h2>

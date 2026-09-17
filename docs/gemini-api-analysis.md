@@ -141,40 +141,34 @@ gem_id is at index [0]
 
 ### 3c. Update Gem
 
+Recorded from the Gem editor's "Update" button (gemini.google.com, Sep 2026). The record has 18 elements; the old 16-element form in the Python client is out of date.
+
 ```json
 [
-  ["kHv0Vd", "[\"gem_id_here\",[\"New Name\",\"New Desc\",\"New prompt...\",null,null,null,null,null,0,null,1,null,null,null,[],0]]", null, "generic"]
+  ["kHv0Vd", "[\"gem_id\",[\"Name\",\"Desc\",\"Prompt\",null,null,null,null,null,0,null,1,null,null,null,[[[null,null,null,null,null,\"$AX...1\"],[null,null,null,null,null,\"$AX...2\"]]],null,null,0]]", null, "generic"]
 ]
 ```
 
-**Payload structure (inner JSON):**
+- `[14]` is the Gem's knowledge: `[[file, file, ...]]`, each file `[null×5, handle]`.
+- The list **replaces** the Gem's knowledge. Send every handle the Gem should keep; an empty list removes all files.
+- Saved Gems get new handles (the editor sent a different handle for a file that was already saved), so keeping existing files means reading the Gem first.
+
+---
+
+### 3c-bis. Knowledge files
+
+Adding a file takes two requests before the update above.
+
+1. **Upload** to `https://content-push.googleapis.com/upload` from the Gemini page (cookies included), with headers `Push-ID` (the page's `qKIAYe` value, default `feeds/mcudyrk2a4khkz`) and `X-Tenant-Id: bard-storage`. The reply body is a temporary reference such as `/contrib_service/ttl_1d/...`. PortSmith sends one multipart request (field `file`, as in the Gemini-API Python client) and falls back to Google's resumable protocol (`X-Goog-Upload-Protocol: resumable`, `start`, then `upload, finalize` at `X-Goog-Upload-Url`).
+2. **ProcessFile**: `POST /_/BardChatUi/data/assistant.lamda.BardFrontendService/ProcessFile?bl=…&f.sid=…&hl=en&_reqid=…&rt=c`, form fields `f.req` and `at`:
+
 ```json
-[
-  gem_id,           // [0] string — ID of gem to update
-  [
-    name,           // [0] string — new name
-    description,    // [1] string — new description
-    prompt,         // [2] string — new system instructions
-    null,           // [3] reserved
-    null,           // [4] reserved
-    null,           // [5] reserved
-    null,           // [6] reserved
-    null,           // [7] reserved
-    0,              // [8] unknown flag
-    null,           // [9] reserved
-    1,              // [10] unknown flag
-    null,           // [11] reserved
-    null,           // [12] reserved
-    null,           // [13] reserved
-    [],             // [14] empty array
-    0               // [15] extra trailing flag (not present in create)
-  ]
-]
+[null, "[[[\"/contrib_service/ttl_1d/...\",null,1,\"text/markdown\"],\"file-name.md\",null,null,null,null,null,null,[1]],null,1,[\"en\"]]"]
 ```
 
-**Note:** The update payload array has 16 elements (extra trailing `0`), while create has 15.
+The reply streams the file record (usually twice) in `wrb.fr` frames with no RPC id: `[[null,16,name,null,null,handle,null,[thumb,download,viewer],1,[secs,nanos],null,mime,null,[true]], …]`. The handle (`$AX...`) is at `[0][5]`.
 
-**Response:** No specific parsing documented — the Python client doesn't parse the update response, just returns a new `Gem` object from input params.
+After uploading, the editor also calls `ESY5D`; PortSmith doesn't need it.
 
 ---
 

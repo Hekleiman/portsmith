@@ -166,6 +166,16 @@ export interface MigrationGuidedInstructions {
   totalSteps?: number;
 }
 
+/** Knowledge that didn't reach a Gem during an automatic run. */
+export interface KnowledgeLeftover {
+  /** Where to add it (the Gem editor when the Gem is known) */
+  link: string;
+  /** Copied files that still need adding, by name */
+  fileNames: string[];
+  /** Whether the project memory document still needs adding */
+  projectMemory: boolean;
+}
+
 export interface OrchestratorStatus {
   phase: "idle" | "running" | "paused" | "memory" | "complete";
   mode: "autofill" | "guided" | "hybrid" | null;
@@ -203,6 +213,8 @@ export interface OrchestratorStatus {
   filesDelivered: Record<string, number>;
   /** Workspaces whose project memory reached the target */
   projectMemoryWorkspaceIds: string[];
+  /** Knowledge to add by hand after the run, per workspace */
+  knowledgeLeftovers: Record<string, KnowledgeLeftover>;
   /** Whether the user finished the memory steps (null: there were none yet) */
   memoryImported: boolean | null;
   /** Warning when multiple Claude tabs are detected */
@@ -402,10 +414,18 @@ export interface MessageMap {
     request: GemConfig;
     response: GemImportResult;
   };
-  /** Update an existing Gem (all fields required by Gemini API) */
+  /**
+   * Replace a Gem's fields and knowledge files. `knowledgeHandles` is the
+   * complete list the Gem should have afterwards (empty removes them all).
+   */
   GEMINI_UPDATE_GEM: {
-    request: GemConfig & { gemId: string };
+    request: GemConfig & { gemId: string; knowledgeHandles: string[] };
     response: GemImportResult;
+  };
+  /** Upload a file for a Gem's knowledge (base64) and return its handle */
+  GEMINI_UPLOAD_KNOWLEDGE_FILE: {
+    request: { fileName: string; mimeType: string; base64: string };
+    response: { success: boolean; handle?: string; error?: string };
   };
   /** Delete a Gem by ID */
   GEMINI_DELETE_GEM: {
@@ -484,6 +504,8 @@ const MESSAGE_TIMEOUT_OVERRIDES: Partial<Record<MessageName, number>> = {
   CLAUDE_EXTRACT_PROJECTS: 180_000,
   GEMINI_EXTRACT_GEMS: 60_000,
   GEMINI_CREATE_GEM: 60_000,
+  GEMINI_UPDATE_GEM: 60_000,
+  GEMINI_UPLOAD_KNOWLEDGE_FILE: 180_000,
   FETCH_GIZMO_API: 30_000,
 };
 

@@ -45,7 +45,14 @@ vi.mock("@/content-scripts/gemini/session", () => {
   };
 });
 
-import { createGem, updateGem, deleteGem } from "@/content-scripts/gemini/importer";
+import {
+  buildUpdatePayload,
+  createGem,
+  deleteGem,
+  updateGem,
+  uploadKnowledgeFile,
+} from "@/content-scripts/gemini/importer";
+import { textToBase64 } from "@/shared/encoding";
 import { getSession } from "@/content-scripts/gemini/session";
 import type { GemConfig } from "@/core/adapters/gemini-import-types";
 
@@ -232,7 +239,7 @@ describe("updateGem", () => {
       return { ok: false, status: 404 };
     });
 
-    const result = await updateGem("gem-existing-123", sampleConfig);
+    const result = await updateGem("gem-existing-123", sampleConfig, []);
 
     expect(result.success).toBe(true);
     expect(result.gemId).toBe("gem-existing-123");
@@ -246,13 +253,189 @@ describe("updateGem", () => {
       return { ok: false, status: 404 };
     });
 
-    const result = await updateGem("gem-existing-123", sampleConfig);
+    const result = await updateGem("gem-existing-123", sampleConfig, []);
 
     expect(result.success).toBe(false);
     expect(result.error).toBeDefined();
     expect(result.fallback).toBeDefined();
     expect(result.fallback!.steps.some((s) => s.includes("Edit"))).toBe(true);
     expect(result.fallback!.configData).toEqual(sampleConfig);
+  });
+});
+
+describe("buildUpdatePayload", () => {
+  it("matches what the Gem editor sends with two knowledge files", () => {
+    // Recorded from gemini.google.com's Gem editor (Sep 2026), handles shortened
+    const recorded =
+      '["5c04ab988642",["PortSmith test Gem (delete me)","Live contract check for PortSmith 0.4.0. Safe to delete.","You are a test Gem for PortSmith. Answer briefly.",null,null,null,null,null,0,null,1,null,null,null,[[[null,null,null,null,null,"$AXone="],[null,null,null,null,null,"$AXtwo"]]],null,null,0]]';
+    const payload = buildUpdatePayload(
+      "5c04ab988642",
+      {
+        name: "PortSmith test Gem (delete me)",
+        description: "Live contract check for PortSmith 0.4.0. Safe to delete.",
+        instructions: "You are a test Gem for PortSmith. Answer briefly.",
+      },
+      ["$AXone=", "$AXtwo"],
+    );
+    expect(payload).toBe(recorded);
+  });
+
+  it("matches the recording with one knowledge file", () => {
+    const payload = JSON.parse(buildUpdatePayload("g", sampleConfig, ["$AXone="])) as unknown[];
+    expect(JSON.stringify((payload[1] as unknown[])[14])).toBe(
+      '[[[null,null,null,null,null,"$AXone="]]]',
+    );
+  });
+});
+
+// ─── uploadKnowledgeFile ────────────────────────────────────
+
+/** ProcessFile streams the file record twice (shape recorded Sep 2026). */
+function processFileResponse(fileName: string, handle: string): string {
+  const record = [null, 16, fileName, null, null, handle, null, ["https://thumb", "https://download", "https://viewer"], 1, [1789659687, 701208000], null, "text/markdown", null, [true]];
+  const frame = (tail: unknown[]) => JSON.stringify([["wrb.fr", null, JSON.stringify([record, ...tail])]]);
+  const parts = [frame([[1], 2]), frame([null, 1]), JSON.stringify([["di", 830], ["af.httprm", 829, "1", 10]])];
+  return ")]}'\n\n" + parts.map((p) => `${p.length + 1}\n${p}`).join("\n");
+}
+
+describe("uploadKnowledgeFile", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.stubGlobal("chrome", mockChrome);
+  });
+
+  it("uploads the bytes, then turns the reference into a handle", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        calls.push({ url, init });
+        if (url.startsWith("https://content-push.googleapis.com/upload")) {
+          return { ok: true, status: 200, text: async () => "/contrib_service/ttl_1d/abc_DEF\n" };
+        }
+        if (url.includes("BardFrontendService/ProcessFile")) {
+          return { ok: true, status: 200, text: async () => processFileResponse("notes.md", "$AXhandle=") };
+        }
+        return { ok: false, status: 404 };
+      }),
+    );
+
+    const result = await uploadKnowledgeFile("notes.md", "text/markdown", textToBase64("# Notes\n"));
+
+    expect(result).toEqual({ success: true, handle: "$AXhandle=" });
+    expect(calls).toHaveLength(2);
+
+    const upload = calls[0]!;
+    expect(upload.init?.method).toBe("POST");
+    expect(upload.init?.credentials).toBe("include");
+    expect(upload.init?.headers).toEqual({
+      "Push-ID": "feeds/mcudyrk2a4khkz",
+      "X-Tenant-Id": "bard-storage",
+    });
+    const file = (upload.init?.body as FormData).get("file") as File;
+    expect(file.name).toBe("notes.md");
+    expect(await file.text()).toBe("# Notes\n");
+
+    const process = calls[1]!;
+    expect(process.url).toContain("/_/BardChatUi/data/assistant.lamda.BardFrontendService/ProcessFile?");
+    expect(process.url).toContain("bl=boq_test");
+    expect(process.url).toContain("rt=c");
+    const form = new URLSearchParams(process.init?.body as string);
+    expect(form.get("f.req")).toBe(
+      '[null,"[[[\\"/contrib_service/ttl_1d/abc_DEF\\",null,1,\\"text/markdown\\"],\\"notes.md\\",null,null,null,null,null,null,[1]],null,1,[\\"en\\"]]"]',
+    );
+    expect(form.get("at")).toMatch(/^token-/);
+  });
+
+  it("reports a failed upload without calling ProcessFile", async () => {
+    const fetchMock = vi.fn(async (_url: string) => ({
+      ok: false,
+      status: 500,
+      headers: new Headers(),
+      text: async (): Promise<string> => "",
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await uploadKnowledgeFile("a.md", "text/markdown", textToBase64("x"));
+    expect(result.success).toBe(false);
+    expect(result.error).toBe(
+      "File upload failed: HTTP 500 (retry: Starting the file upload failed: HTTP 500)",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls.every((c) => !String(c[0]).includes("ProcessFile"))).toBe(true);
+  });
+
+  it("falls back to the resumable upload", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        calls.push({ url, init });
+        if (url === "https://content-push.googleapis.com/upload") throw new TypeError("Failed to fetch");
+        if (url === "https://content-push.googleapis.com/upload/") {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ "X-Goog-Upload-Url": "https://content-push.googleapis.com/upload/?upload_id=1" }),
+            text: async (): Promise<string> => "",
+          };
+        }
+        if (url.includes("upload_id=1")) {
+          return { ok: true, status: 200, text: async () => "/contrib_service/ttl_1d/r" };
+        }
+        return { ok: true, status: 200, text: async () => processFileResponse("a.md", "$AXr") };
+      }),
+    );
+    const result = await uploadKnowledgeFile("a.md", "text/markdown", textToBase64("xyz"));
+    expect(result).toEqual({ success: true, handle: "$AXr" });
+    const start = calls[1]!.init!.headers as Record<string, string>;
+    expect(start["X-Goog-Upload-Command"]).toBe("start");
+    expect(start["X-Goog-Upload-Header-Content-Length"]).toBe("3");
+    const finish = calls[2]!.init!.headers as Record<string, string>;
+    expect(finish["X-Goog-Upload-Command"]).toBe("upload, finalize");
+    expect(finish).not.toHaveProperty("Authorization");
+  });
+
+  it("won't send the file to an upload address on another host", async () => {
+    const fetchMock = vi.fn(async (url: string) =>
+      url.endsWith("/upload/")
+        ? { ok: true, status: 200, headers: new Headers({ "X-Goog-Upload-Url": "https://example.com/x" }), text: async (): Promise<string> => "" }
+        : { ok: false, status: 403, text: async (): Promise<string> => "" },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await uploadKnowledgeFile("a.md", "text/markdown", textToBase64("x"));
+    expect(result.error).toContain("didn't return an upload address");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects a reply that isn't a file reference", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, status: 200, headers: new Headers(), text: async () => "<html>" })),
+    );
+    const result = await uploadKnowledgeFile("a.md", "text/markdown", textToBase64("x"));
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("didn't return a file reference");
+  });
+
+  it("fails when ProcessFile returns no handle", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url.includes("content-push")
+          ? { ok: true, status: 200, text: async () => "/contrib_service/ttl_1d/x" }
+          : { ok: true, status: 200, text: async () => ")]}'\n\n27\n[[\"e\",5,null,null,10397]]" },
+      ),
+    );
+    const result = await uploadKnowledgeFile("a.md", "text/markdown", textToBase64("x"));
+    expect(result).toEqual({ success: false, error: "Gemini didn't accept the file" });
+  });
+
+  it("refuses empty files without a request", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await uploadKnowledgeFile("a.md", "text/markdown", "");
+    expect(result.success).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

@@ -18,6 +18,13 @@ import {
   type RPCPayload,
 } from "./batchexecute";
 import { getSession, refreshSession } from "./session";
+import {
+  GEMINI_FILE_LIMIT_BYTES,
+  buildKnowledgeField,
+  processFile,
+  uploadFileBytes,
+} from "./knowledge";
+import { base64ToBytes } from "@/shared/encoding";
 
 // ─── RPC Constants ──────────────────────────────────────────
 
@@ -56,12 +63,17 @@ function buildCreatePayload(config: GemConfig): string {
 }
 
 /**
- * Build the update-gem payload.
+ * Build the update-gem payload, as the Gem editor sends it (Sep 2026):
+ * `[gem_id, [name, desc, prompt, null×5, 0, null, 1, null×3, knowledge, null, null, 0]]`
  *
- * Format: `[gem_id, [name, desc, prompt, null×5, 0, null, 1, null×3, [], 0]]`
- * (16-element inner array — extra trailing 0 vs. create)
+ * `knowledge` replaces the Gem's knowledge files, so pass every handle the
+ * Gem should keep. An empty list removes them all.
  */
-function buildUpdatePayload(gemId: string, config: GemConfig): string {
+export function buildUpdatePayload(
+  gemId: string,
+  config: GemConfig,
+  knowledgeHandles: string[],
+): string {
   return JSON.stringify([
     gemId,
     [
@@ -79,7 +91,9 @@ function buildUpdatePayload(gemId: string, config: GemConfig): string {
       null,
       null,
       null,
-      [],
+      buildKnowledgeField(knowledgeHandles),
+      null,
+      null,
       0,
     ],
   ]);
@@ -147,18 +161,22 @@ function buildDeleteFallback(): GemImportFallback {
 async function executeWithRetry(
   payloads: RPCPayload[],
 ): Promise<unknown[]> {
-  let session: GeminiSession;
+  return withSession((session) => batchExecute(session, payloads));
+}
+
+/** Run a request, refreshing the session once on HTTP 400 / 401. */
+async function withSession<T>(
+  request: (session: GeminiSession) => Promise<T>,
+): Promise<T> {
   try {
-    session = await getSession();
-    return await batchExecute(session, payloads);
+    return await request(await getSession());
   } catch (err) {
     if (
       err instanceof Error &&
       (err.message.includes("HTTP 401") ||
         err.message.includes("HTTP 400"))
     ) {
-      session = await refreshSession();
-      return await batchExecute(session, payloads);
+      return await request(await refreshSession());
     }
     throw err;
   }
@@ -216,17 +234,18 @@ export async function createGem(config: GemConfig): Promise<GemImportResult> {
 /**
  * Update an existing custom Gem.
  *
- * All fields (name, description, instructions) are required by the
- * Gemini API even if only one changed.
+ * Gemini replaces the whole Gem: name, description, instructions and the
+ * list of knowledge files. Pass every knowledge handle the Gem should keep.
  */
 export async function updateGem(
   gemId: string,
   config: GemConfig,
+  knowledgeHandles: string[],
 ): Promise<GemImportResult> {
   const payloads: RPCPayload[] = [
     {
       rpcid: RPC_UPDATE_GEM,
-      payload: buildUpdatePayload(gemId, config),
+      payload: buildUpdatePayload(gemId, config, knowledgeHandles),
     },
   ];
 
@@ -245,6 +264,34 @@ export async function updateGem(
   // The Python client doesn't parse the update response — a 200 means
   // success. Return the same gemId back.
   return { success: true, gemId };
+}
+
+/**
+ * Upload one file and return the handle to attach it to a Gem.
+ */
+export async function uploadKnowledgeFile(
+  fileName: string,
+  mimeType: string,
+  base64: string,
+): Promise<{ success: boolean; handle?: string; error?: string }> {
+  try {
+    const bytes = base64ToBytes(base64);
+    if (bytes.length === 0) return { success: false, error: "the file is empty" };
+    if (bytes.length > GEMINI_FILE_LIMIT_BYTES) {
+      return { success: false, error: "the file is over Gemini's 100 MB limit" };
+    }
+    const type = mimeType || "application/octet-stream";
+    const handle = await withSession(async (session) => {
+      const ref = await uploadFileBytes(session, bytes, fileName, type);
+      return processFile(session, ref, fileName, type);
+    });
+    return { success: true, handle };
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : "upload failed",
+    };
+  }
 }
 
 /**
@@ -282,11 +329,19 @@ onMessage("GEMINI_CREATE_GEM", async (req) => {
 });
 
 onMessage("GEMINI_UPDATE_GEM", async (req) => {
-  return updateGem(req.gemId, {
-    name: req.name,
-    description: req.description,
-    instructions: req.instructions,
-  });
+  return updateGem(
+    req.gemId,
+    {
+      name: req.name,
+      description: req.description,
+      instructions: req.instructions,
+    },
+    req.knowledgeHandles,
+  );
+});
+
+onMessage("GEMINI_UPLOAD_KNOWLEDGE_FILE", async (req) => {
+  return uploadKnowledgeFile(req.fileName, req.mimeType, req.base64);
 });
 
 onMessage("GEMINI_DELETE_GEM", async (req) => {

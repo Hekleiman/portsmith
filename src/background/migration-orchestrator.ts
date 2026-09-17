@@ -5,18 +5,25 @@ import type {
   MigrationStepFallback,
   MigrationGuidedInstructions,
   InstructionsDelivery,
+  KnowledgeLeftover,
 } from "@/shared/messaging";
 import { onMessage, safeSendTabMessage } from "@/shared/messaging";
 import { autofillWorkspace } from "@/core/adapters/claude-autofill";
 import { generateInstructions } from "@/core/adapters/claude-adapter";
 import {
-  buildGemKnowledgeStep,
+  GEMINI_GEM_MANAGER_URL,
   generateGeminiInstructions,
+  geminiGemEditUrl,
 } from "@/core/adapters/gemini-guided";
 import { generateChatGPTInstructions } from "@/core/adapters/chatgpt-guided";
 import { buildMemoryStepsForTarget } from "@/core/adapters/memory-steps";
 import { buildManualCreateFallback, handOverNote } from "@/core/adapters/manual-fallback";
-import { hasProjectMemory } from "@/core/transform/project-memory";
+import {
+  hasProjectMemory,
+  projectMemoryFileName,
+  renderProjectMemoryMarkdown,
+} from "@/core/transform/project-memory";
+import { textToBase64 } from "@/shared/encoding";
 import {
   getInstructionsForTarget,
   isPlatformId,
@@ -25,6 +32,7 @@ import {
   type PlatformId,
 } from "@/core/platforms";
 import {
+  loadFile,
   loadManifest,
   saveCheckpoint,
   loadLatestCheckpoint,
@@ -86,6 +94,7 @@ export class MigrationOrchestrator {
   private followUps: Record<string, string[]> = {};
   private filesDelivered: Record<string, number> = {};
   private projectMemoryWorkspaceIds: string[] = [];
+  private knowledgeLeftovers: Record<string, KnowledgeLeftover> = {};
   private memoryImported: boolean | null = null;
   private migrationTabId: number | null = null;
   /** Google account path of the pinned Gemini tab, e.g. "/u/1/" */
@@ -194,6 +203,7 @@ export class MigrationOrchestrator {
       this.followUps = { ...(snap.followUps ?? {}) };
       this.filesDelivered = { ...(snap.filesDelivered ?? {}) };
       this.projectMemoryWorkspaceIds = [...(snap.projectMemoryWorkspaceIds ?? [])];
+      this.knowledgeLeftovers = { ...(snap.knowledgeLeftovers ?? {}) };
       this.memoryImported = snap.memoryImported ?? null;
       this.currentWorkspaceIndex = Math.max(
         0,
@@ -273,6 +283,7 @@ export class MigrationOrchestrator {
       followUps: { ...this.followUps },
       filesDelivered: { ...this.filesDelivered },
       projectMemoryWorkspaceIds: [...this.projectMemoryWorkspaceIds],
+      knowledgeLeftovers: { ...this.knowledgeLeftovers },
       memoryImported: this.memoryImported,
       duplicateTabWarning: this.duplicateTabWarning ?? undefined,
     };
@@ -799,6 +810,16 @@ export class MigrationOrchestrator {
     // Don't create a second Gem with the same name without asking.
     const before = tabId === null ? null : await this.findGemsNamed(tabId, workspace.name);
     if (!this.isCurrent(run)) return;
+    if (before && before.length > 0 && this.mode !== "hybrid") {
+      // Automatic runs never stop to ask: leave it for the results page.
+      this.updateStep({
+        id: stepId,
+        title: `Skipped "${workspace.name}": a Gem with this name is already in Gemini`,
+        status: "skipped",
+      });
+      this.addManualWorkspace(workspace, "A Gem with this name is already in Gemini");
+      return;
+    }
     if (before && before.length > 0) {
       this.updateStep({
         id: stepId,
@@ -867,38 +888,24 @@ export class MigrationOrchestrator {
       await this.markCreated(run, workspace.id);
       if (!this.isCurrent(run)) return;
 
-      // Gems take knowledge files through the UI only, so hand those over.
-      const knowledge = buildGemKnowledgeStep(workspace, source);
-      if (knowledge) {
-        const kId = `${workspace.id}-knowledge`;
-        this.updateStep({
-          id: kId,
-          title: "Add the knowledge files to the Gem",
-          status: "pending",
-          fallback: knowledge,
-          confirmLabel: "Done",
-          skipLabel: "I'll do this later",
-        });
-        const done = await this.waitForConfirmation(kId);
-        if (!this.isCurrent(run)) return;
-        this.updateStep({
-          id: kId,
-          title: done ? "Knowledge files added" : "Knowledge files left for later",
-          status: done ? "success" : "skipped",
-        });
-        if (done) {
-          if (workspace.knowledgeFiles.length > 0) {
-            this.filesDelivered[workspace.id] = workspace.knowledgeFiles.length;
-          }
-          if (hasProjectMemory(workspace)) this.projectMemoryWorkspaceIds.push(workspace.id);
-        } else {
-          this.followUps[workspace.id] = [
-            hasProjectMemory(workspace)
-              ? "Add the knowledge files and the project memory document to the Gem"
-              : "Add the knowledge files to the Gem",
-          ];
-        }
-      }
+      await this.addGemKnowledge(run, tabId, gemId, workspace, instructions, source);
+      return;
+    }
+
+    if (this.mode !== "hybrid") {
+      // Automatic runs keep going; the results page has the manual route.
+      const unsure = before === null;
+      this.updateStep({
+        id: stepId,
+        title: `Couldn't create "${workspace.name}". It's listed at the end`,
+        status: "failed",
+      });
+      this.addManualWorkspace(
+        workspace,
+        unsure
+          ? `Gemini didn't confirm the new Gem (${error}). Check your Gems before creating it by hand`
+          : `Not created in Gemini (${error})`,
+      );
       return;
     }
 
@@ -933,6 +940,158 @@ export class MigrationOrchestrator {
       this.updateStep({ id: stepId, title: `"${workspace.name}" not created`, status: "skipped" });
       this.addManualWorkspace(workspace, `Not created in Gemini (${error})`);
     }
+  }
+
+  /**
+   * Put the copied files and the project memory document into the Gem's
+   * Knowledge. Never waits for the user: whatever doesn't make it is
+   * listed on the results page with its downloads.
+   */
+  private async addGemKnowledge(
+    run: number,
+    tabId: number | null,
+    gemId: string | undefined,
+    workspace: Workspace,
+    instructions: string,
+    source: string,
+  ): Promise<void> {
+    const copied = workspace.knowledgeFiles.filter((f) => f.contentRef);
+    const withMemory = hasProjectMemory(workspace);
+    const total = copied.length + (withMemory ? 1 : 0);
+    if (total === 0) return;
+
+    const stepId = `${workspace.id}-knowledge`;
+    const link = gemId
+      ? geminiGemEditUrl(gemId, this.geminiAccount)
+      : GEMINI_GEM_MANAGER_URL;
+    const leftover = (fileNames: string[], memory: boolean, why: string): void => {
+      if (fileNames.length === 0 && !memory) return;
+      this.knowledgeLeftovers[workspace.id] = { link, fileNames, projectMemory: memory };
+      const what = [
+        ...(fileNames.length > 0
+          ? [`${fileNames.length} file${fileNames.length === 1 ? "" : "s"}`]
+          : []),
+        ...(memory ? ["the project memory document"] : []),
+      ].join(" and ");
+      this.addFollowUp(workspace.id, `Add ${what} to the Gem by hand (${why})`);
+    };
+
+    if (tabId === null || !gemId) {
+      this.updateStep({
+        id: stepId,
+        title: "Knowledge files left for the end",
+        status: "skipped",
+      });
+      leftover(
+        copied.map((f) => f.originalName),
+        withMemory,
+        "PortSmith didn't get the new Gem's ID",
+      );
+      return;
+    }
+
+    this.updateStep({
+      id: stepId,
+      title: `Adding ${total} file${total === 1 ? "" : "s"} to the Gem`,
+      status: "running",
+    });
+
+    const handles: string[] = [];
+    const sentFiles: string[] = [];
+    let memorySent = false;
+    const failures: string[] = [];
+
+    const upload = async (fileName: string, mimeType: string, base64: string): Promise<boolean> => {
+      try {
+        const result = await safeSendTabMessage(tabId, "GEMINI_UPLOAD_KNOWLEDGE_FILE", {
+          fileName,
+          mimeType,
+          base64,
+        });
+        if (result.success && result.handle) {
+          handles.push(result.handle);
+          return true;
+        }
+        failures.push(`${fileName}: ${result.error ?? "upload failed"}`);
+      } catch (err) {
+        failures.push(`${fileName}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      return false;
+    };
+
+    if (withMemory) {
+      const doc = renderProjectMemoryMarkdown(workspace, source);
+      memorySent = await upload(projectMemoryFileName(source), "text/markdown", textToBase64(doc));
+      if (!this.isCurrent(run)) return;
+    }
+    for (const file of copied) {
+      const record = await loadFile(file.contentRef!).catch(() => undefined);
+      if (!this.isCurrent(run)) return;
+      if (!record?.blob) {
+        failures.push(`${file.originalName}: the copied file is missing`);
+        continue;
+      }
+      if (await upload(file.originalName, file.mimeType || record.mimeType, record.blob)) {
+        sentFiles.push(file.originalName);
+      }
+      if (!this.isCurrent(run)) return;
+    }
+
+    let saved = false;
+    if (handles.length > 0) {
+      try {
+        const result = await safeSendTabMessage(tabId, "GEMINI_UPDATE_GEM", {
+          gemId,
+          name: workspace.name,
+          description: workspace.description,
+          instructions,
+          knowledgeHandles: handles,
+        });
+        saved = result.success;
+        if (!saved) failures.push(`saving the Gem: ${result.error ?? "unknown error"}`);
+      } catch (err) {
+        failures.push(`saving the Gem: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      if (!this.isCurrent(run)) return;
+    }
+
+    const addedFiles = saved ? sentFiles : [];
+    const memoryAdded = saved && memorySent;
+    if (addedFiles.length > 0) this.filesDelivered[workspace.id] = addedFiles.length;
+    if (memoryAdded && !this.projectMemoryWorkspaceIds.includes(workspace.id)) {
+      this.projectMemoryWorkspaceIds.push(workspace.id);
+    }
+    const added = addedFiles.length + (memoryAdded ? 1 : 0);
+
+    if (added === total) {
+      this.updateStep({
+        id: stepId,
+        title: `Added ${total} file${total === 1 ? "" : "s"} to the Gem`,
+        status: "success",
+        filesDelivered: addedFiles.length,
+      });
+    } else {
+      if (failures.length > 0) {
+        console.warn(`[PortSmith] Gem knowledge for "${workspace.name}": ${failures.join("; ")}`);
+      }
+      this.updateStep({
+        id: stepId,
+        title: `Added ${added} of ${total} files to the Gem. The rest are listed at the end`,
+        status: "fallback",
+        filesDelivered: addedFiles.length,
+      });
+      leftover(
+        copied.map((f) => f.originalName).filter((n) => !addedFiles.includes(n)),
+        withMemory && !memoryAdded,
+        failures[0] ?? "Gemini didn't accept them",
+      );
+    }
+  }
+
+  private addFollowUp(workspaceId: string, note: string): void {
+    const notes = this.followUps[workspaceId] ?? [];
+    if (!notes.includes(note)) notes.push(note);
+    this.followUps[workspaceId] = notes;
   }
 
   /** IDs of the user's Gems with this name, or null if they can't be listed. */
@@ -996,6 +1155,7 @@ export class MigrationOrchestrator {
       followUps: { ...this.followUps },
       filesDelivered: { ...this.filesDelivered },
       projectMemoryWorkspaceIds: [...this.projectMemoryWorkspaceIds],
+      knowledgeLeftovers: { ...this.knowledgeLeftovers },
       ...(this.memoryImported !== null ? { memoryImported: this.memoryImported } : {}),
     };
 
@@ -1030,6 +1190,7 @@ export class MigrationOrchestrator {
     this.followUps = {};
     this.filesDelivered = {};
     this.projectMemoryWorkspaceIds = [];
+    this.knowledgeLeftovers = {};
     this.memoryImported = null;
     this.pauseRequested = false;
     this.pauseResolver = null;

@@ -51,6 +51,6 @@ The organization ID comes from Claude's `lastActiveOrg` cookie. Claude navigates
 PortSmith runs two content scripts on gemini.google.com.
 
 - **Extractor:** lists the user's Gems (name, description, instructions) through Gemini's own `batchexecute` endpoint, using the page's session token.
-- **Importer:** creates Gems the same way when Gemini is the target.
+- **Importer:** creates Gems the same way when Gemini is the target, and adds the copied knowledge files to them. Files are uploaded from the Gemini tab to `content-push.googleapis.com`, the upload service Gemini's own page uses, then attached with Gemini's `ProcessFile` and Gem update requests. No extra host permission is needed because the request comes from the gemini.google.com page.
 
 Requests use the user's existing Google session. Gemini navigates on the client side (`/app`, `/gem/*`, `/gems/*`), so the scripts need the whole domain.

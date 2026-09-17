@@ -1,6 +1,10 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useMigrationStore } from "../store/migration-store";
-import { sendMessage, type OrchestratorStatus } from "@/shared/messaging";
+import {
+  sendMessage,
+  type KnowledgeLeftover,
+  type OrchestratorStatus,
+} from "@/shared/messaging";
 import {
   deleteManifestAndFiles,
   loadLatestCheckpoint,
@@ -26,6 +30,7 @@ import ManualFollowUp, {
 import ConfirmButton from "../components/ConfirmButton";
 import StepCard from "../components/StepCard";
 import { buildMemoryStepsForTarget } from "@/core/adapters/memory-steps";
+import { buildLeftoverCards } from "@/core/adapters/leftover-cards";
 
 // ─── Capabilities each target can't provide ─────────────────
 
@@ -49,6 +54,8 @@ interface RunResult {
   followUps: Map<string, string[]>;
   filesDelivered: Map<string, number>;
   projectMemory: Set<string>;
+  /** Knowledge an automatic run couldn't add, per workspace */
+  knowledgeLeftovers: Map<string, KnowledgeLeftover>;
   /** null when the run had no memory step (or ended before it) */
   memoryImported: boolean | null;
 }
@@ -158,6 +165,7 @@ async function loadRunResult(): Promise<RunResult> {
       followUps: new Map(Object.entries(status.followUps ?? {})),
       filesDelivered: new Map(Object.entries(status.filesDelivered ?? {})),
       projectMemory: new Set(status.projectMemoryWorkspaceIds ?? []),
+      knowledgeLeftovers: new Map(Object.entries(status.knowledgeLeftovers ?? {})),
       memoryImported: status.memoryImported ?? null,
     };
   }
@@ -172,6 +180,7 @@ async function loadRunResult(): Promise<RunResult> {
     followUps: new Map(Object.entries(snap?.followUps ?? {})),
     filesDelivered: new Map(Object.entries(snap?.filesDelivered ?? {})),
     projectMemory: new Set(snap?.projectMemoryWorkspaceIds ?? []),
+    knowledgeLeftovers: new Map(Object.entries(snap?.knowledgeLeftovers ?? {})),
     memoryImported: snap?.memoryImported ?? null,
   };
 }
@@ -197,6 +206,7 @@ export default function Complete(): React.JSX.Element {
   const [loading, setLoading] = useState(true);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [memoryDone, setMemoryDone] = useState<Set<string>>(new Set());
+  const [leftoverDone, setLeftoverDone] = useState<Set<string>>(new Set());
 
   // Memory steps to show again when they were skipped during the run
   const memorySteps = useMemo(
@@ -350,6 +360,12 @@ export default function Complete(): React.JSX.Element {
   const durationMs = migrationStartedAt ? Date.now() - migrationStartedAt : null;
 
   const followUpItems = buildFollowUpItems(selectedWorkspaces, result, target);
+  const leftoverCards = buildLeftoverCards(
+    selectedWorkspaces,
+    result,
+    target,
+    platformLabel(manifest.source.platform),
+  );
 
   const allFailed =
     workspaceSummaries.length > 0 && migratedCount === 0;
@@ -411,6 +427,37 @@ export default function Complete(): React.JSX.Element {
 
       {/* Manual Follow-Up */}
       {followUpItems.length > 0 && <ManualFollowUp items={followUpItems} />}
+
+      {/* What the automatic run left for the user */}
+      {leftoverCards.length > 0 && (
+        <section className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+          <h3 className="text-sm font-medium text-amber-900">
+            Finish these by hand
+          </h3>
+          <p className="mt-1 text-xs text-amber-900">
+            PortSmith kept going and saved these for the end.
+          </p>
+          <div className="mt-2 space-y-2">
+            {leftoverCards.map((step, i) => (
+              <StepCard
+                key={step.id}
+                step={step}
+                stepNumber={i + 1}
+                totalSteps={leftoverCards.length}
+                done={leftoverDone.has(step.id)}
+                onToggleDone={() =>
+                  setLeftoverDone((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(step.id)) next.delete(step.id);
+                    else next.add(step.id);
+                    return next;
+                  })
+                }
+              />
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Memory import that was skipped during the run */}
       {result.memoryImported === false && memorySteps.length > 0 && (

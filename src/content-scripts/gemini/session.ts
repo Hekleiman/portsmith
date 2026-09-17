@@ -29,6 +29,7 @@ function currentPrefix(): string {
  * - cfb2h: build label
  * - FdrFJe: session ID
  * - TuX5cc: language code
+ * - qKIAYe: push channel for file uploads
  */
 export async function initSession(): Promise<GeminiSession> {
   const prefix = currentPrefix();
@@ -54,8 +55,9 @@ export async function initSession(): Promise<GeminiSession> {
   const buildLabel = html.match(/"cfb2h":\s*"(.*?)"/)?.[1];
   const sessionId = html.match(/"FdrFJe":\s*"(.*?)"/)?.[1];
   const language = html.match(/"TuX5cc":\s*"(.*?)"/)?.[1] ?? "en";
+  const pushId = html.match(/"qKIAYe":\s*"(.*?)"/)?.[1];
 
-  cachedSession = { accessToken, buildLabel, sessionId, language, prefix };
+  cachedSession = { accessToken, buildLabel, sessionId, language, prefix, pushId };
   return cachedSession;
 }
 
