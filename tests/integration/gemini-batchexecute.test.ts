@@ -1,11 +1,14 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import {
+  batchExecute,
   encodeRequest,
   decodeResponse,
   extractResponseBody,
   getFrameIdentifier,
+  type GeminiSession,
   type RPCPayload,
 } from "@/content-scripts/gemini/batchexecute";
+import { accountPrefix } from "@/content-scripts/gemini/session";
 
 // ─── Helpers ─────────────────────────────────────────────────
 
@@ -371,5 +374,68 @@ describe("encode → decode round trip", () => {
     const frames = decodeResponse(response);
     const responseBody = extractResponseBody(frames[0]) as unknown[];
     expect(responseBody[0]).toBe("new-gem-id-xyz");
+  });
+});
+
+// ─── Account prefix ──────────────────────────────────────────
+
+describe("accountPrefix", () => {
+  it("finds a secondary account's prefix", () => {
+    expect(accountPrefix("/u/1/app")).toBe("/u/1");
+    expect(accountPrefix("/u/12/gems/view")).toBe("/u/12");
+    expect(accountPrefix("/u/2")).toBe("/u/2");
+  });
+
+  it("is empty for the default account and look-alike paths", () => {
+    expect(accountPrefix("/app")).toBe("");
+    expect(accountPrefix("/")).toBe("");
+    expect(accountPrefix("")).toBe("");
+    expect(accountPrefix("/u/abc/app")).toBe("");
+    expect(accountPrefix("/u/1x/app")).toBe("");
+    expect(accountPrefix("/gem/u/1/app")).toBe("");
+  });
+});
+
+describe("batchExecute URL", () => {
+  const base: GeminiSession = { accessToken: "tok", buildLabel: "bl-1", sessionId: "sid-1", language: "en" };
+  const ok = buildBatchResponse([buildEnvelope("CNgdBe", [null, null, [], null], "custom")]);
+  const payloads: RPCPayload[] = [{ rpcid: "CNgdBe", payload: '[2,["en"],0]', identifier: "custom" }];
+
+  function captureFetch(): Array<{ url: URL; body: URLSearchParams }> {
+    const seen: Array<{ url: URL; body: URLSearchParams }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        seen.push({ url: new URL(url), body: new URLSearchParams(String(init?.body)) });
+        return new Response(ok, { status: 200 });
+      }),
+    );
+    return seen;
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("posts to the /u/1/ endpoint with a matching source-path", async () => {
+    const seen = captureFetch();
+    await batchExecute({ ...base, prefix: "/u/1" }, payloads);
+    expect(seen[0]!.url.origin).toBe("https://gemini.google.com");
+    expect(seen[0]!.url.pathname).toBe("/u/1/_/BardChatUi/data/batchexecute");
+    expect(seen[0]!.url.searchParams.get("source-path")).toBe("/u/1/app");
+    expect(seen[0]!.body.get("at")).toBe("tok");
+  });
+
+  it("is unchanged without a prefix", async () => {
+    const seen = captureFetch();
+    await batchExecute(base, payloads);
+    await batchExecute({ ...base, prefix: "" }, payloads);
+    for (const call of seen) {
+      expect(call.url.pathname).toBe("/_/BardChatUi/data/batchexecute");
+      expect(call.url.searchParams.get("source-path")).toBe("/app");
+      expect(call.url.searchParams.get("rpcids")).toBe("CNgdBe");
+      expect(call.url.searchParams.get("bl")).toBe("bl-1");
+      expect(call.url.searchParams.get("f.sid")).toBe("sid-1");
+    }
   });
 });

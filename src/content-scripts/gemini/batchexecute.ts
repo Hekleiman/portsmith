@@ -23,12 +23,14 @@ export interface GeminiSession {
   sessionId?: string;
   /** TuX5cc language code */
   language: string;
+  /** Account path prefix of the tab ("/u/1"), "" for the default account */
+  prefix?: string;
 }
 
 // ─── Constants ──────────────────────────────────────────────
 
-const BATCH_EXEC_URL =
-  "https://gemini.google.com/_/BardChatUi/data/batchexecute";
+export const GEMINI_ORIGIN = "https://gemini.google.com";
+const BATCH_EXEC_PATH = "/_/BardChatUi/data/batchexecute";
 
 const BATCH_EXEC_HEADERS: Record<string, string> = {
   "Content-Type": "application/x-www-form-urlencoded;charset=utf-8",
@@ -184,13 +186,15 @@ export async function batchExecute(
 ): Promise<unknown[]> {
   const currentReqId = reqId;
   reqId += 100000;
+  // Tokens belong to one account, so the URL must carry the same prefix.
+  const prefix = session.prefix ?? "";
 
   const params = new URLSearchParams({
     rpcids: payloads.map((p) => p.rpcid).join(","),
     hl: session.language,
     _reqid: String(currentReqId),
     rt: "c",
-    "source-path": "/app",
+    "source-path": `${prefix}/app`,
   });
 
   if (session.buildLabel) {
@@ -205,7 +209,8 @@ export async function batchExecute(
     "f.req": encodeRequest(payloads),
   });
 
-  const response = await fetch(`${BATCH_EXEC_URL}?${params.toString()}`, {
+  const url = `${GEMINI_ORIGIN}${prefix}${BATCH_EXEC_PATH}?${params.toString()}`;
+  const response = await fetch(url, {
     method: "POST",
     headers: BATCH_EXEC_HEADERS,
     body: body.toString(),

@@ -88,7 +88,7 @@ const chromeMock = {
 };
 vi.stubGlobal("chrome", chromeMock);
 
-import { MigrationOrchestrator } from "@/background/migration-orchestrator";
+import { MigrationOrchestrator, geminiAccountPath } from "@/background/migration-orchestrator";
 
 // ─── Fixtures ───────────────────────────────────────────────
 
@@ -611,5 +611,86 @@ describe("MigrationOrchestrator: Gemini duplicates", () => {
     expect(status.completedWorkspaceIds).toEqual(["a"]);
     expect(status.pendingConfirmStepId).toBeNull();
     expect(h.tabMessages.filter((m) => m.name === "GEMINI_CREATE_GEM")).toHaveLength(1);
+  });
+});
+
+describe("MigrationOrchestrator: Gemini accounts", () => {
+  const TABS: Record<number, string> = {
+    30: "https://gemini.google.com/app",
+    31: "https://gemini.google.com/u/1/gems/view",
+    32: "https://gemini.google.com/u/1/app",
+  };
+
+  function openTabs(ids: number[], activeId: number | null): void {
+    chromeMock.tabs.query.mockImplementation((async (q: { url: string; active?: boolean }) => {
+      if (!q.url.includes("gemini")) return [];
+      const list = q.active ? ids.filter((id) => id === activeId) : ids;
+      return list.map((id) => ({ id, url: TABS[id] }));
+    }) as never);
+    chromeMock.tabs.get.mockImplementation((async (id: number) => ({ id, url: TABS[id], discarded: false })) as never);
+  }
+
+  it("reads the account from a Gemini URL", () => {
+    expect(geminiAccountPath("https://gemini.google.com/app")).toBe("/u/0/");
+    expect(geminiAccountPath("https://gemini.google.com/u/1/app")).toBe("/u/1/");
+    expect(geminiAccountPath("https://gemini.google.com/u/3")).toBe("/u/3/");
+    expect(geminiAccountPath("https://gemini.google.com/u/2?hl=en")).toBe("/u/2/");
+    expect(geminiAccountPath(undefined)).toBe("/u/0/");
+  });
+
+  it("warns when tabs belong to different accounts and stays with the chosen one", async () => {
+    openTabs([30, 31], 31);
+    putManifest("m1", [ws("a"), ws("b")]);
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "autofill", ["a", "b"], "gemini");
+
+    const warning = o.getStatus().duplicateTabWarning ?? "";
+    expect(warning).toContain("2 Google accounts (/u/0/, /u/1/)");
+    expect(warning).toContain("gemini.google.com/u/1/");
+    expect(warning).not.toContain("\u2014");
+
+    // The user switches to the default-account tab mid-run: PortSmith stays put.
+    openTabs([30, 31], 30);
+    await waitFor(() => o.getStatus().phase === "complete");
+    const geminiTabs = new Set(h.tabMessages.filter((m) => m.name.startsWith("GEMINI_")).map((m) => m.tabId));
+    expect([...geminiTabs]).toEqual([31]);
+    expect(h.tabMessages.filter((m) => m.name === "GEMINI_CREATE_GEM")).toHaveLength(2);
+  });
+
+  it("falls back to another tab of the same account only", async () => {
+    openTabs([30, 31], 31);
+    const respond = h.tabResponder;
+    let closed = false;
+    h.tabResponder = (name, payload) => {
+      // The pinned /u/1/ tab closes after the first Gem is created.
+      if (name === "GEMINI_CREATE_GEM" && !closed) {
+        closed = true;
+        openTabs([30, 32], 30);
+        chromeMock.tabs.get.mockImplementation((async (id: number) => {
+          if (id === 31) throw new Error("No tab with id 31");
+          return { id, url: TABS[id], discarded: false };
+        }) as never);
+      }
+      return respond(name, payload);
+    };
+    putManifest("m1", [ws("a"), ws("b")]);
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "autofill", ["a", "b"], "gemini");
+    await waitFor(() => o.getStatus().phase === "complete");
+
+    const creates = h.tabMessages.filter((m) => m.name === "GEMINI_CREATE_GEM");
+    expect(creates.map((m) => m.tabId)).toEqual([31, 32]);
+  });
+
+  it("keeps the old notice when the tabs share one account", async () => {
+    openTabs([31, 32], 31);
+    putManifest("m1", [ws("a")]);
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "autofill", ["a"], "gemini");
+    expect(o.getStatus().duplicateTabWarning).toBe(
+      "2 Gemini tabs are open. PortSmith uses one of them; close the extras if you run into problems.",
+    );
+    await waitFor(() => o.getStatus().phase === "complete");
+    expect(new Set(h.tabMessages.filter((m) => m.name.startsWith("GEMINI_")).map((m) => m.tabId))).toEqual(new Set([31]));
   });
 });

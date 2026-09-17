@@ -15,70 +15,12 @@ import {
   type GeminiSession,
   type RPCPayload,
 } from "./batchexecute";
+import { getSession, refreshSession } from "./session";
 
 // ─── Constants ──────────────────────────────────────────────
 
-const GEMINI_APP_URL = "https://gemini.google.com/app";
-
 /** RPC ID for listing gems */
 const RPC_LIST_GEMS = "CNgdBe";
-
-// ─── Session ────────────────────────────────────────────────
-
-let cachedSession: GeminiSession | null = null;
-
-/**
- * Fetch the Gemini app page and extract session tokens via regex.
- *
- * Tokens extracted:
- * - SNlM0e  → CSRF / access token (required)
- * - cfb2h   → build label
- * - FdrFJe  → session ID
- * - TuX5cc  → language code
- */
-async function initSession(): Promise<GeminiSession> {
-  const response = await fetch(GEMINI_APP_URL, {
-    credentials: "include",
-  });
-
-  if (!response.ok) {
-    throw new Error(
-      `Failed to load Gemini app page: HTTP ${response.status}`,
-    );
-  }
-
-  const html = await response.text();
-
-  const accessToken = html.match(/"SNlM0e":\s*"(.*?)"/)?.[1];
-  if (!accessToken) {
-    throw new Error(
-      "Could not find Gemini's session token. Are you signed in to gemini.google.com?",
-    );
-  }
-
-  const buildLabel = html.match(/"cfb2h":\s*"(.*?)"/)?.[1];
-  const sessionId = html.match(/"FdrFJe":\s*"(.*?)"/)?.[1];
-  const language = html.match(/"TuX5cc":\s*"(.*?)"/)?.[1] ?? "en";
-
-  cachedSession = { accessToken, buildLabel, sessionId, language };
-  return cachedSession;
-}
-
-/**
- * Get the current session, initialising if needed.
- */
-async function getSession(): Promise<GeminiSession> {
-  if (cachedSession) return cachedSession;
-  return initSession();
-}
-
-/**
- * Force a session refresh (e.g. after a 401 / expired token).
- */
-async function refreshSession(): Promise<GeminiSession> {
-  cachedSession = null;
-  return initSession();
-}
 
 // ─── Gem Parsing ────────────────────────────────────────────
 
@@ -234,6 +176,9 @@ export async function extractGems(): Promise<GemExtractionResult> {
       });
       continue;
     }
+
+    // An account without custom Gems gets an empty body (verified Sep 2026)
+    if (body.length === 0) continue;
 
     // Gem list is at index [2] of the parsed body
     const gemList: unknown = body[2];
