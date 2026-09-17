@@ -19,7 +19,12 @@ export function buildMemoryStepsForTarget(
   const source = platformLabel(manifest.source.platform);
   switch (target) {
     case "gemini":
-      return generateGeminiMemoryInstructions(items, source, custom);
+      return generateGeminiMemoryInstructions(
+        items,
+        source,
+        custom,
+        manifest.source.platform,
+      );
     case "chatgpt":
       return generateChatGPTMemoryInstructions(items, source, custom);
     default:

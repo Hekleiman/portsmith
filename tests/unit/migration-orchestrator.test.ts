@@ -144,6 +144,14 @@ async function waitFor(check: () => boolean, label = "condition"): Promise<void>
   throw new Error(`Timed out waiting for ${label}`);
 }
 
+/** Gemini runs end with the optional chat history step, even without memory. */
+async function finishGeminiRun(o: MigrationOrchestrator): Promise<void> {
+  await waitFor(() => o.getStatus().phase === "memory", "memory");
+  expect(o.getStatus().memorySteps.map((st) => st.id)).toEqual(["memory-chat-history"]);
+  expect(o.markMemoryDone()).toBe(true);
+  expect(o.getStatus().phase).toBe("complete");
+}
+
 const created = (id: string) => [
   { id: `${id}-navigate`, title: "Claude is ready", status: "success" },
   { id: `${id}-create-api`, title: "Project created", status: "success", projectCreated: true },
@@ -399,7 +407,7 @@ describe("MigrationOrchestrator: Gemini target", () => {
     ]);
     const o = new MigrationOrchestrator();
     await o.start("m1", "autofill", ["a"], "gemini");
-    await waitFor(() => o.getStatus().phase === "complete");
+    await finishGeminiRun(o);
     const create = h.tabMessages.find((m) => m.name === "GEMINI_CREATE_GEM");
     expect(create?.payload).toEqual(expect.objectContaining({ instructions: "Gemini version" }));
     expect(o.getStatus().completedWorkspaceIds).toEqual(["a"]);
@@ -422,7 +430,7 @@ describe("MigrationOrchestrator: Gemini target", () => {
     await waitFor(() => o.getStatus().pendingConfirmStepId === "b-create");
     o.confirmStep(false);
 
-    await waitFor(() => o.getStatus().phase === "complete");
+    await finishGeminiRun(o);
     const status = o.getStatus();
     expect(status.completedWorkspaceIds).toEqual(["a"]);
     expect(status.instructionsDelivery.a).toBe("manual");
@@ -438,7 +446,7 @@ describe("MigrationOrchestrator: Gemini target", () => {
     await waitFor(() => o.getStatus().pendingConfirmStepId === "a-create");
     expect(o.getStatus().currentSteps[0]?.confirmLabel).toBe("Create Gem");
     o.confirmStep(false);
-    await waitFor(() => o.getStatus().phase === "complete");
+    await finishGeminiRun(o);
     expect(h.tabMessages.some((m) => m.name === "GEMINI_CREATE_GEM")).toBe(false);
     expect(o.getStatus().manualWorkspaces).toEqual([
       { id: "a", name: "Workspace a", reason: "Skipped" },
@@ -541,7 +549,7 @@ describe("MigrationOrchestrator: follow-ups", () => {
     await waitFor(() => o.getStatus().pendingConfirmStepId === "a-create");
     expect(o.getStatus().currentSteps[0]?.confirmLabel).toBe("It's in Gemini now");
     o.confirmStep(true, token(o));
-    await waitFor(() => o.getStatus().phase === "complete");
+    await finishGeminiRun(o);
     const status = o.getStatus();
     expect(status.completedWorkspaceIds).toEqual(["a"]);
     expect(status.filesDelivered).toEqual({});
@@ -557,7 +565,7 @@ describe("MigrationOrchestrator: follow-ups", () => {
     await waitFor(() => o.getStatus().guidedInstructions !== null);
     const save = o.getStatus().guidedInstructions!.steps.find((st) => st.id === "a-name")!;
     expect(o.markWorkspaceDone("a", [save.id])).toBe(true);
-    await waitFor(() => o.getStatus().phase === "complete");
+    await finishGeminiRun(o);
     expect(o.getStatus().followUps.a).toEqual([`Not marked done: ${save.title}`]);
   });
 
@@ -584,7 +592,7 @@ describe("MigrationOrchestrator: Gemini duplicates", () => {
     await waitFor(() => o.getStatus().pendingConfirmStepId === "a-create");
     expect(o.getStatus().currentSteps[0]?.title).toContain("already in Gemini");
     o.confirmStep(false, token(o));
-    await waitFor(() => o.getStatus().phase === "complete");
+    await finishGeminiRun(o);
     expect(h.tabMessages.some((m) => m.name === "GEMINI_CREATE_GEM")).toBe(false);
     expect(o.getStatus().manualWorkspaces[0]?.reason).toContain("already in Gemini");
   });
@@ -598,7 +606,7 @@ describe("MigrationOrchestrator: Gemini duplicates", () => {
     });
     const o = new MigrationOrchestrator();
     await o.start("m1", "autofill", ["a"], "gemini");
-    await waitFor(() => o.getStatus().phase === "complete");
+    await finishGeminiRun(o);
     const status = o.getStatus();
     expect(status.completedWorkspaceIds).toEqual(["a"]);
     expect(status.pendingConfirmStepId).toBeNull();
@@ -643,7 +651,7 @@ describe("MigrationOrchestrator: Gemini accounts", () => {
 
     // The user switches to the default-account tab mid-run: PortSmith stays put.
     openTabs([30, 31], 30);
-    await waitFor(() => o.getStatus().phase === "complete");
+    await finishGeminiRun(o);
     const geminiTabs = new Set(h.tabMessages.filter((m) => m.name.startsWith("GEMINI_")).map((m) => m.tabId));
     expect([...geminiTabs]).toEqual([31]);
     expect(h.tabMessages.filter((m) => m.name === "GEMINI_CREATE_GEM")).toHaveLength(2);
@@ -668,7 +676,7 @@ describe("MigrationOrchestrator: Gemini accounts", () => {
     putManifest("m1", [ws("a"), ws("b")]);
     const o = new MigrationOrchestrator();
     await o.start("m1", "autofill", ["a", "b"], "gemini");
-    await waitFor(() => o.getStatus().phase === "complete");
+    await finishGeminiRun(o);
 
     const creates = h.tabMessages.filter((m) => m.name === "GEMINI_CREATE_GEM");
     expect(creates.map((m) => m.tabId)).toEqual([31, 32]);
@@ -682,7 +690,7 @@ describe("MigrationOrchestrator: Gemini accounts", () => {
     expect(o.getStatus().duplicateTabWarning).toBe(
       "2 Gemini tabs are open. PortSmith uses one of them; close the extras if you run into problems.",
     );
-    await waitFor(() => o.getStatus().phase === "complete");
+    await finishGeminiRun(o);
     expect(new Set(h.tabMessages.filter((m) => m.name.startsWith("GEMINI_")).map((m) => m.tabId))).toEqual(new Set([31]));
   });
 });

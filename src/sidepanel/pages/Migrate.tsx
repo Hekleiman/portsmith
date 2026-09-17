@@ -588,21 +588,38 @@ export default function Migrate(): React.JSX.Element {
     const currentStep = status.memorySteps[memoryStepIdx];
     // Finishing on the last step counts that step as done.
     const allDone = status.memorySteps.every(
-      (st) => memoryCompletedIds.has(st.id) || st.id === currentStep?.id,
+      (st) =>
+        st.optional === true ||
+        memoryCompletedIds.has(st.id) ||
+        st.id === currentStep?.id,
     );
     const isLast = memoryStepIdx >= status.memorySteps.length - 1;
+    const onlyOptional = status.memorySteps.every((st) => st.optional === true);
 
     return (
       <div className="flex flex-col gap-3">
         {disconnectedBanner}
         <div>
-          <h2 className="text-lg font-semibold text-gray-900">
-            Bring over your memory
-          </h2>
-          <p className="mt-1 text-xs text-gray-600">
-            {targetName} doesn&apos;t let extensions add memories directly, so
-            this part is quick copy and paste.
-          </p>
+          {onlyOptional ? (
+            <>
+              <h2 className="text-lg font-semibold text-gray-900">
+                One more thing you can bring
+              </h2>
+              <p className="mt-1 text-xs text-gray-600">
+                This step is optional. Finish whenever you like.
+              </p>
+            </>
+          ) : (
+            <>
+              <h2 className="text-lg font-semibold text-gray-900">
+                Bring over your memory
+              </h2>
+              <p className="mt-1 text-xs text-gray-600">
+                {targetName} doesn&apos;t let extensions add memories directly, so
+                this part is quick copy and paste.
+              </p>
+            </>
+          )}
         </div>
 
         {currentStep && (
