@@ -182,7 +182,17 @@ Recorded on `gemini.google.com/saved-info` (Sep 2026). The page loads with `GPRi
 
 Reply body: `[null,null,null,[[[id,"I prefer short concise responses.",[secs,nanos],null,[secs,nanos],null,null,null,null,2,1]]]]`. Gemini tidies the wording (capitals, final period) before saving. The call takes about four seconds. The page also calls `ESY5D` before and after.
 
-The Gemini-API Python client names `ZKcapf` (list), `gSnMcd` (update), `Ok9j9b` (delete) and `YgU2Cc` (delete all) for memories, but has no payloads for them.
+The Gemini-API Python client names `ZKcapf` (list), `gSnMcd` (update), `Ok9j9b` (delete) and `YgU2Cc` (delete all) for memories, but has no payloads for them. `Ok9j9b` takes `[id]` and was exercised against a live account (Sep 2026).
+
+**Length limit.** `xVRQX` accepts at most **1500 characters**, which is not the 10,000 the editor's `maxlength` allows. Measured by binary search on a live account: 1500 saves, 1501 does not. Over-length text comes back as HTTP 200 with a body-less frame carrying error code 13, in 120 to 240 ms rather than the 2 to 5 seconds a real save takes:
+
+```json
+["wrb.fr","xVRQX",null,null,null,[13],"generic"]
+```
+
+No content category was refused: phone numbers, email addresses, named third parties, cannabis products, emoji, markdown, newlines, quotes and backslashes all saved. Duplicates are not rejected either, so the same text can be saved twice.
+
+Some refusals are transient and carry the same code 13, but arrive slowly (around 10 s); the identical text saves on a retry. Only slow refusals are worth retrying. See docs/gemini-saved-info-probe.md.
 
 ---
 

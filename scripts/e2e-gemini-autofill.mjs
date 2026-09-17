@@ -18,7 +18,6 @@ import path from "path";
 
 const EXT = path.resolve(process.argv[2] ?? "dist");
 const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ps-gem-"));
-const REFUSE = /refuse me/i;
 
 const ctx = await chromium.launchPersistentContext(userDataDir, {
   headless: true,
@@ -29,6 +28,11 @@ const ctx = await chromium.launchPersistentContext(userDataDir, {
 
 const seen = { gemCreates: [], gemUpdates: [], uploads: [], processFiles: [], saves: [], lists: 0, other: [] };
 const saved = [];
+// Gemini's real create limit, well under the 10,000 its editor allows.
+const SAVED_INFO_API_MAX_LENGTH = 1500;
+const ALWAYS_REFUSE = /always refuse/i;
+const FLAKY = /flaky/i;
+const attempts = new Map();
 const APP = `<!doctype html><html><head><title>Gemini</title></head><body><main>stub</main>
 <script>window.WIZ_global_data={"SNlM0e":"tok-1","cfb2h":"boq_stub","FdrFJe":"sid-1","TuX5cc":"en","qKIAYe":"feeds/stub"};</script>
 </body></html>`;
@@ -75,7 +79,15 @@ await ctx.route("https://gemini.google.com/**", async (route) => {
       else if (rpcid === "xVRQX") {
         const text = arg[0][1];
         seen.saves.push(text);
-        if (REFUSE.test(text)) out.push(["wrb.fr", rpcid, null, null, null, [3], identifier]);
+        const tries = (attempts.get(text) ?? 0) + 1;
+        attempts.set(text, tries);
+        // Error code 13 with no body: what a live account returns for text
+        // over the limit, and for the transient refusals it recovers from.
+        const refuse =
+          text.length > SAVED_INFO_API_MAX_LENGTH ||
+          ALWAYS_REFUSE.test(text) ||
+          (FLAKY.test(text) && tries < 3);
+        if (refuse) out.push(["wrb.fr", rpcid, null, null, null, [13], identifier]);
         else { saved.push(text); out.push(wrb(rpcid, [null, null, null, [[[`id-${saved.length}`, text, [1, 2], null, [1, 2], null, null, null, null, 2, 1]]]], identifier)); }
       } else { seen.other.push(rpcid); out.push(wrb(rpcid, [], identifier)); }
     }
@@ -99,6 +111,8 @@ await panel.goto(`chrome-extension://${extId}/src/sidepanel/index.html`);
 await new Promise((r) => setTimeout(r, 1500));
 
 const now = new Date().toISOString();
+// ~2000 characters of whole sentences, so it splits on a sentence boundary.
+const LONG_MEMORY = "I keep detailed notes about the migration project. ".repeat(40).trim();
 const mem = (id, fact) => ({ id, fact, category: "preference", confidence: 1, source: "explicit", workspaceIds: [], migration: { fitsConstraints: true, priority: 5 } });
 const manifest = {
   version: "1.0.0",
@@ -120,7 +134,15 @@ const manifest = {
     migration: { confidence: 1, warnings: [], manualStepsRequired: [] },
     projectMemory: { source: "claude_memory", capturedAt: now, entries: [{ id: "pm-1", title: "Decisions", content: "We chose Vite." }] },
   }],
-  memory: [mem("m-1", "I like short answers"), mem("m-2", "Refuse me please"), mem("m-3", "I like short answers."), mem("m-4", "I live in Vista")],
+  memory: [
+    mem("m-1", "I like short answers"),
+    mem("m-2", "Always refuse this one please"),
+    mem("m-3", "I like short answers."),
+    mem("m-4", "I live in Vista"),
+    // Over the 1500-character create limit: has to be split to be saved.
+    mem("m-5", LONG_MEMORY),
+    mem("m-6", "Flaky memory that settles on a retry"),
+  ],
   globalInstructions: "Always answer in English.",
   metadata: { generatedBy: "e2e" },
 };
@@ -190,15 +212,41 @@ check(
 check(final?.filesDelivered?.["ws-gem"] === 2, `Files delivered: ${JSON.stringify(final?.filesDelivered)}`);
 check(final?.projectMemoryWorkspaceIds?.includes("ws-gem"), "Project memory not recorded");
 check(seen.lists === 1, `Expected the saved-info list to be read once, got ${seen.lists}`);
+const tries = (re) => seen.saves.filter((t) => re.test(t)).length;
+const longParts = seen.saves.filter((t) => t.includes("detailed notes about the migration"));
+const uniqueLongParts = [...new Set(longParts)];
+
+// The long memory is split, and every piece is inside Gemini's real limit.
+check(uniqueLongParts.length === 2, `Expected the long memory to be split in 2, got ${uniqueLongParts.length}`);
 check(
-  JSON.stringify(seen.saves) === JSON.stringify(["Always answer in English.", "I like short answers", "Refuse me please", "I live in Vista"]),
-  `Saved texts: ${JSON.stringify(seen.saves)}`,
+  uniqueLongParts.every((p) => p.length <= SAVED_INFO_API_MAX_LENGTH),
+  `A split piece is still over the limit: ${uniqueLongParts.map((p) => p.length).join(", ")}`,
 );
-check(final?.memoryAutoSaved?.saved === 4 && final?.memoryAutoSaved?.total === 5, `memoryAutoSaved: ${JSON.stringify(final?.memoryAutoSaved)}`);
+check(
+  uniqueLongParts.join(" ") === LONG_MEMORY,
+  "The split pieces do not reconstruct the original memory",
+);
+check(
+  uniqueLongParts.every((p) => saved.includes(p)),
+  "Not every piece of the long memory was saved",
+);
+
+// A refusal Gemini recovers from is retried; one it never accepts is not retried forever.
+check(tries(/flaky/i) === 3, `Expected the flaky memory to be tried 3 times, got ${tries(/flaky/i)}`);
+check(saved.some((t) => /flaky/i.test(t)), "The flaky memory never saved");
+check(tries(/always refuse/i) === 3, `Expected the refused memory to be tried 3 times, got ${tries(/always refuse/i)}`);
+check(!saved.some((t) => /always refuse/i.test(t)), "The always-refused memory should not be saved");
+
+// Text that threw is never retried, and plain memories are sent once.
+check(tries(/^I live in Vista$/) === 1, `"I live in Vista" sent ${tries(/^I live in Vista$/)} times`);
+check(seen.saves.includes("Always answer in English."), "Custom instructions were not saved");
+
+check(final?.memoryAutoSaved?.saved === 6 && final?.memoryAutoSaved?.total === 7, `memoryAutoSaved: ${JSON.stringify(final?.memoryAutoSaved)}`);
 check((final?.memoryAutoSaved?.reasons ?? []).length === 1, `No reason recorded for the refusal: ${JSON.stringify(final?.memoryAutoSaved)}`);
 const paste = (final?.memorySteps ?? []).find((st) => st.id === "memory-paste");
-check(paste?.copyBlocks?.[0]?.content?.includes("Refuse me please"), "The refused memory is missing from the paste step");
+check(paste?.copyBlocks?.[0]?.content?.includes("Always refuse this one"), "The refused memory is missing from the paste step");
 check(!paste?.copyBlocks?.[0]?.content?.includes("I live in Vista"), "A saved memory should not be in the paste step");
+check(!paste?.copyBlocks?.[0]?.content?.includes("detailed notes about the migration"), "The split memory was saved and should not be in the paste step");
 check(seen.other.length === 0, `Unexpected RPCs: ${seen.other}`);
 
 console.log(JSON.stringify({

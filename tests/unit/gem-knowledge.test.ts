@@ -11,7 +11,10 @@ import { decodeResponse, encodeRequest } from "@/content-scripts/gemini/batchexe
 import {
   createSavedInfoRequest,
   listSavedInfoRequest,
+  parseCreateSavedInfoRefusal,
   parseCreateSavedInfoResponse,
+  splitSavedInfoText,
+  SAVED_INFO_API_MAX_LENGTH,
   parseListSavedInfoResponse,
   savedInfoKey,
 } from "@/content-scripts/gemini/saved-info";
@@ -228,5 +231,87 @@ describe("Gemini saved info (recorded Sep 2026)", () => {
     expect(savedInfoKey("i prefer short concise responses")).toBe(
       savedInfoKey("I prefer short concise responses."),
     );
+  });
+});
+
+describe("Gemini saved-info length limit (measured Sep 2026)", () => {
+  const within = (parts: string[]): boolean =>
+    parts.every(
+      (p) => p.length <= SAVED_INFO_API_MAX_LENGTH &&
+        new TextEncoder().encode(p).length <= SAVED_INFO_API_MAX_LENGTH,
+    );
+
+  it("leaves text that already fits alone", () => {
+    expect(splitSavedInfoText("I prefer short answers.")).toEqual(["I prefer short answers."]);
+    expect(splitSavedInfoText("   ")).toEqual([]);
+    expect(splitSavedInfoText("  padded  ")).toEqual(["padded"]);
+  });
+
+  it("splits at 1500 characters, not at the editor's 10,000", () => {
+    const exact = "a".repeat(SAVED_INFO_API_MAX_LENGTH);
+    expect(splitSavedInfoText(exact)).toEqual([exact]);
+    expect(splitSavedInfoText("a".repeat(SAVED_INFO_API_MAX_LENGTH + 1))).toHaveLength(2);
+  });
+
+  it("prefers line breaks, then sentence ends, then word boundaries", () => {
+    const sentence = `${"word ".repeat(200).trim()}.`;
+    const parts = splitSavedInfoText(`${sentence}\n${sentence}`);
+    expect(parts.length).toBeGreaterThan(1);
+    expect(within(parts)).toBe(true);
+    // Nothing is cut mid-word when a word boundary was available.
+    expect(parts.every((p) => !p.startsWith("ord") && !p.endsWith("wor"))).toBe(true);
+  });
+
+  it("cuts inside a word only when one word is longer than the limit", () => {
+    const parts = splitSavedInfoText("x".repeat(3200));
+    expect(parts).toHaveLength(3);
+    expect(within(parts)).toBe(true);
+    expect(parts.join("")).toBe("x".repeat(3200));
+  });
+
+  it("keeps multi-byte characters whole and inside the byte budget", () => {
+    // Emoji are 4 UTF-8 bytes and 2 UTF-16 units each.
+    const parts = splitSavedInfoText("\u{1F6A7}".repeat(800));
+    expect(within(parts)).toBe(true);
+    expect(parts.join("")).toBe("\u{1F6A7}".repeat(800));
+    expect(parts.every((p) => !p.includes("�"))).toBe(true);
+  });
+});
+
+describe("Gemini saved-info refusals", () => {
+  const frames = (envelope: unknown[]): unknown[] =>
+    decodeResponse(
+      (() => {
+        const json = JSON.stringify([envelope]);
+        return `)]}'\n\n${1 + json.length}\n${json}`;
+      })(),
+    );
+
+  it("reads the error code off a refusal", () => {
+    expect(parseCreateSavedInfoRefusal(frames(["wrb.fr", "xVRQX", null, null, null, [13], "generic"])))
+      .toEqual([13]);
+  });
+
+  it("reports no code when the frame carries none", () => {
+    expect(parseCreateSavedInfoRefusal(frames(["wrb.fr", "xVRQX", null, null, null, null, "generic"])))
+      .toEqual([]);
+  });
+
+  it("is not a refusal when the reply has a body", () => {
+    const saved = frames([
+      "wrb.fr",
+      "xVRQX",
+      JSON.stringify([null, null, null, [[["id-1", "Saved.", [1, 2]]]]]),
+      null,
+      null,
+      null,
+      "generic",
+    ]);
+    expect(parseCreateSavedInfoRefusal(saved)).toBeNull();
+    expect(parseCreateSavedInfoResponse(saved)).toEqual({ id: "id-1", text: "Saved." });
+  });
+
+  it("is null when there is no create frame at all", () => {
+    expect(parseCreateSavedInfoRefusal(frames(["e", 4, null, null, 330]))).toBeNull();
   });
 });

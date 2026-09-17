@@ -28,8 +28,10 @@ import { base64ToBytes } from "@/shared/encoding";
 import {
   createSavedInfoRequest,
   listSavedInfoRequest,
+  parseCreateSavedInfoRefusal,
   parseCreateSavedInfoResponse,
   parseListSavedInfoResponse,
+  SAVED_INFO_API_MAX_LENGTH,
   type SavedInfoEntry,
 } from "./saved-info";
 
@@ -337,9 +339,25 @@ export async function listMemories(): Promise<
   }
 }
 
+/** Waits between retries of a refused entry. */
+const SAVE_RETRY_DELAYS_MS = [1_000, 3_000];
+
+const delay = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
 /**
  * Save entries to "Your instructions for Gemini", a few at a time.
  * Each entry is its own request, like the page's "Add" button.
+ *
+ * Gemini refuses some entries it would accept a moment later, answering with
+ * error code 13 and no body after about ten seconds instead of the usual four
+ * (measured against a live account; see docs/gemini-saved-info-probe.md).
+ * Those are retried, because a refusal means the server answered and saved
+ * nothing. A request that threw is never retried: it may have been saved on
+ * the way back, and a second try would add it twice.
+ *
+ * Text over `SAVED_INFO_API_MAX_LENGTH` is refused every time, so it is not
+ * retried. Split it with `splitSavedInfoText` before calling this.
  */
 export async function saveMemories(
   texts: string[],
@@ -349,27 +367,44 @@ export async function saveMemories(
     texts.map((text) => ({ text, success: false }));
   let next = 0;
 
-  // No retry here: a request that failed on the way back may still have
-  // saved the entry, and a second try would add it twice.
   const saveOne = async (index: number): Promise<void> => {
     const text = texts[index]!;
-    try {
-      const frames = await executeWithRetry([createSavedInfoRequest(text)]);
+    const tooLong = text.length > SAVED_INFO_API_MAX_LENGTH;
+
+    for (let attempt = 0; ; attempt++) {
+      let frames: unknown[];
+      try {
+        frames = await executeWithRetry([createSavedInfoRequest(text)]);
+      } catch (err) {
+        results[index] = {
+          text,
+          success: false,
+          error: err instanceof Error ? err.message : "request failed",
+        };
+        break;
+      }
+
       const entry = parseCreateSavedInfoResponse(frames);
-      results[index] = entry
-        ? { text, success: true, id: entry.id }
-        : {
-            text,
-            success: false,
-            error: `Gemini's reply had no saved entry: ${describeFrames(frames)}`,
-          };
-    } catch (err) {
+      if (entry) {
+        results[index] = { text, success: true, id: entry.id };
+        break;
+      }
+
+      const refusal = parseCreateSavedInfoRefusal(frames);
       results[index] = {
         text,
         success: false,
-        error: err instanceof Error ? err.message : "request failed",
+        error: tooLong
+          ? `over Gemini's ${SAVED_INFO_API_MAX_LENGTH}-character limit for one entry (${text.length})`
+          : `Gemini refused the entry${refusal && refusal.length > 0 ? ` (code ${refusal.join(",")})` : ""}: ${describeFrames(frames)}`,
       };
+
+      const retryable = refusal !== null && !tooLong;
+      const wait = SAVE_RETRY_DELAYS_MS[attempt];
+      if (!retryable || wait === undefined) break;
+      await delay(wait);
     }
+
     const failed = results[index];
     if (failed && !failed.success) {
       // Logged here so the reason is visible in the Gemini tab's console.

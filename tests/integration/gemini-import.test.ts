@@ -49,9 +49,11 @@ import {
   buildUpdatePayload,
   createGem,
   deleteGem,
+  saveMemories,
   updateGem,
   uploadKnowledgeFile,
 } from "@/content-scripts/gemini/importer";
+import { SAVED_INFO_API_MAX_LENGTH } from "@/content-scripts/gemini/saved-info";
 import { textToBase64 } from "@/shared/encoding";
 import { getSession } from "@/content-scripts/gemini/session";
 import type { GemConfig } from "@/core/adapters/gemini-import-types";
@@ -685,5 +687,110 @@ describe("orchestrator Gemini import scenarios", () => {
     expect(result.fallback!.steps.some((s) => s.includes("My Special Gem"))).toBe(
       true,
     );
+  });
+});
+
+// ─── saveMemories ───────────────────────────────────────────
+
+/**
+ * A real batchexecute frame for the create call: `wrb.fr` with either a body
+ * (saved) or no body and an error code (refused).
+ */
+function savedInfoReply(
+  outcome: { id: string; text: string } | { code: number[] },
+): string {
+  const envelope =
+    "code" in outcome
+      ? ["wrb.fr", "xVRQX", null, null, null, outcome.code, "generic"]
+      : [
+          "wrb.fr",
+          "xVRQX",
+          JSON.stringify([
+            null,
+            null,
+            null,
+            [[[outcome.id, outcome.text, [1, 2], null, [1, 2], null, null, null, null, 2, 1]]],
+          ]),
+          null,
+          null,
+          null,
+          "generic",
+        ];
+  const frameJson = JSON.stringify([envelope]);
+  return `)]}'\n\n${1 + frameJson.length}\n${frameJson}`;
+}
+
+/** Run `saveMemories` with the retry waits skipped. */
+async function saveWithTimers(
+  texts: string[],
+  concurrency?: number,
+): Promise<Awaited<ReturnType<typeof saveMemories>>> {
+  vi.useFakeTimers();
+  try {
+    const pending = saveMemories(texts, concurrency);
+    await vi.advanceTimersByTimeAsync(30_000);
+    return await pending;
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
+describe("saveMemories", () => {
+  it("retries an entry Gemini refuses and keeps the one that then saves", async () => {
+    const bodies = [
+      savedInfoReply({ code: [13] }),
+      savedInfoReply({ id: "mem-1", text: "I like short answers." }),
+    ];
+    let calls = 0;
+    setupFetch(async () => ({
+      ok: true,
+      text: async () => bodies[calls++] ?? bodies[bodies.length - 1]!,
+    }));
+
+    const results = await saveWithTimers(["i like short answers"]);
+
+    expect(calls).toBe(2);
+    expect(results[0]).toMatchObject({ success: true, id: "mem-1" });
+  });
+
+  it("gives up after the retries and reports Gemini's error code", async () => {
+    let calls = 0;
+    setupFetch(async () => {
+      calls++;
+      return { ok: true, text: async () => savedInfoReply({ code: [13] }) };
+    });
+
+    const results = await saveWithTimers(["something Gemini keeps refusing"]);
+
+    // One attempt plus the two retry waits.
+    expect(calls).toBe(3);
+    expect(results[0]!.success).toBe(false);
+    expect(results[0]!.error).toContain("code 13");
+  });
+
+  it("does not retry text over the create call's length limit", async () => {
+    let calls = 0;
+    setupFetch(async () => {
+      calls++;
+      return { ok: true, text: async () => savedInfoReply({ code: [13] }) };
+    });
+
+    const results = await saveWithTimers(["x".repeat(SAVED_INFO_API_MAX_LENGTH + 1)]);
+
+    expect(calls).toBe(1);
+    expect(results[0]!.error).toContain("1500-character limit");
+  });
+
+  it("never retries a request that threw, which may have saved on the way back", async () => {
+    let calls = 0;
+    setupFetch(async () => {
+      calls++;
+      return { ok: false, status: 500, statusText: "Server Error" };
+    });
+
+    const results = await saveWithTimers(["a memory"]);
+
+    expect(calls).toBe(1);
+    expect(results[0]!.success).toBe(false);
   });
 });

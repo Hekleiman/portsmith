@@ -28,6 +28,7 @@ import { textToBase64 } from "@/shared/encoding";
 import {
   SAVED_INFO_MAX_LENGTH,
   savedInfoKey,
+  splitSavedInfoText,
 } from "@/content-scripts/gemini/saved-info";
 import {
   getInstructionsForTarget,
@@ -628,14 +629,30 @@ export class MigrationOrchestrator {
     const tabId = wanted.some((w) => !done.has(w.id)) ? await this.getGeminiTab() : null;
     if (!this.isCurrent(run)) return;
 
+    // Gemini's create call takes about 1500 characters, well under what its
+    // own editor allows, so anything longer is cut into pieces it will take.
+    // Longer than the editor allows still goes to the paste step rather than
+    // turning one memory into dozens of entries.
+    const partsById = new Map<string, string[]>();
+    for (const w of wanted) {
+      if (sameAs.has(w.id) || w.text.length > SAVED_INFO_MAX_LENGTH) continue;
+      const parts = splitSavedInfoText(w.text);
+      if (parts.length > 0) partsById.set(w.id, parts);
+    }
+
     // Skip what's already in Gemini (a repeated run, or added by hand).
+    let existingKeys: Set<string> | null = null;
     if (tabId !== null) {
       try {
         const existing = await safeSendTabMessage(tabId, "GEMINI_LIST_MEMORIES");
         if (!this.isCurrent(run)) return;
         if (existing.success && existing.texts) {
           const keys = new Set(existing.texts.map(savedInfoKey));
-          for (const w of wanted) if (keys.has(savedInfoKey(w.text))) done.add(w.id);
+          existingKeys = keys;
+          // A split memory counts as saved only when every piece is there.
+          for (const [id, parts] of partsById) {
+            if (parts.every((part) => keys.has(savedInfoKey(part)))) done.add(id);
+          }
         } else {
           console.warn(`[PortSmith] Couldn't list Gemini's saved info: ${existing.error ?? "unknown error"}`);
         }
@@ -645,10 +662,19 @@ export class MigrationOrchestrator {
       }
       progress();
     }
-    // Longer than the editor allows: leave it for the paste step.
-    const todo = wanted.filter(
-      (w) => !done.has(w.id) && !sameAs.has(w.id) && w.text.length <= SAVED_INFO_MAX_LENGTH,
-    );
+
+    const todo: Array<{ id: string; text: string }> = [];
+    for (const [id, parts] of partsById) {
+      if (done.has(id)) continue;
+      for (const text of parts) {
+        if (existingKeys?.has(savedInfoKey(text))) continue;
+        todo.push({ id, text });
+      }
+    }
+    // A memory is saved once every piece of it is.
+    const partsLeft = new Map<string, number>();
+    for (const item of todo) partsLeft.set(item.id, (partsLeft.get(item.id) ?? 0) + 1);
+    const failedIds = new Set<string>();
     const markCopies = (): void => {
       for (const [id, first] of sameAs) if (done.has(first)) done.add(id);
     };
@@ -665,13 +691,18 @@ export class MigrationOrchestrator {
         results.forEach((r, j) => {
           const item = chunk[j];
           if (!item) return;
-          if (r.success) done.add(item.id);
-          else {
+          if (r.success) {
+            partsLeft.set(item.id, (partsLeft.get(item.id) ?? 1) - 1);
+          } else {
+            failedIds.add(item.id);
             const reason = r.error ?? "no reason given";
             reasons.set(reason, (reasons.get(reason) ?? 0) + 1);
             console.warn(`[PortSmith] Memory not saved (${reason}): ${item.text.slice(0, 80)}`);
           }
         });
+        for (const item of chunk) {
+          if (!failedIds.has(item.id) && (partsLeft.get(item.id) ?? 1) <= 0) done.add(item.id);
+        }
       } catch (err) {
         if (!this.isCurrent(run)) return;
         console.warn(`[PortSmith] Saving memories failed: ${err instanceof Error ? err.message : String(err)}`);
