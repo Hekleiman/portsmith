@@ -97,13 +97,21 @@ A second Google account was signed in and served at `/u/1/app`.
 
 Conclusions:
 - Tokens are per account, and the URL prefix must match the account the tokens came from.
-- PortSmith always fetches `https://gemini.google.com/app` (`session.ts` and `extractor.ts`) and always posts to the unprefixed batchexecute URL. The requests are consistent, so they succeed, but they always act on account 0 (`/u/0`).
-- If the user is working in a `/u/1/` tab, Gems are read from and created in the default account, not the one on screen. Nothing reports an error.
-- The orchestrator also opens `https://gemini.google.com/app` when no tab exists, and it matches any Gemini tab.
+- Before the fix, PortSmith always fetched `https://gemini.google.com/app` (in `session.ts` and `extractor.ts`) and posted to the unprefixed batchexecute URL. Those requests succeeded, but they always acted on the default account (`/u/0/`).
+- So from a `/u/1/` tab, Gems were read from and created in the default account, not the one on screen, and nothing reported an error.
 
-Proposed fix (not applied, since no payload was rejected):
-1. In `session.ts`, take the account prefix from the tab that runs the content script: `const prefix = /^\/u\/\d+/.exec(location.pathname)?.[0] ?? ""`.
-2. Fetch `${origin}${prefix}/app` for the tokens and keep `prefix` in `GeminiSession`.
-3. In `batchexecute.ts`, post to `${origin}${prefix}/_/BardChatUi/data/batchexecute` with `source-path=${prefix}/app`.
-4. Have `extractor.ts` use the shared `session.ts` instead of its own copy, so both paths agree.
-5. In the side panel, show which account is in use (for example "Gemini account 2 (/u/1/)") before a migration starts, and use the same tab for extraction and import.
+**Fixed in 5128021** (on `release/v0.4.0`):
+- **`session.ts`:** takes the `/u/N` prefix from the tab that runs the content script, fetches `<prefix>/app` for the tokens, and keeps the prefix in `GeminiSession`.
+- **`batchexecute.ts`:** posts to `<prefix>/_/BardChatUi/data/batchexecute` with `source-path=<prefix>/app`. Tabs without a prefix send the same requests as before.
+- **`extractor.ts`:** uses the shared `session.ts`, so reading and creating always use the same account.
+- **Migration run:** PortSmith picks one Gemini tab and keeps its account for the whole run. If that tab closes, it only switches to a tab of the same account. When the open Gemini tabs belong to more than one account, the side panel warns which account will be used and asks the user to close the others.
+- **Empty Gem list:** an account with no custom Gems gets an empty reply body (`[]`). That now counts as zero Gems, not a failed read.
+
+Live result after the fix (read-only, 2026-09-17). The bundled `extractor.ts` was run in the page, and no Gem was created:
+
+| Tab | Requests | Gem list |
+|-----|----------|----------|
+| `/u/1/app` | `/u/1/app`, then `/u/1/_/BardChatUi/data/batchexecute` with `source-path=/u/1/app` | Account 1's Gems: success, 0 Gems, no test Gem |
+| `/app` | `/app`, then `/_/BardChatUi/data/batchexecute` with `source-path=/app` | Account 0's Gems: success, 3 Gems, including the test Gem |
+
+Still open: the side panel doesn't show which account is in use before a migration starts, unless tabs from several accounts are open.
