@@ -1,23 +1,39 @@
 # Dashboard replacements for v0.4.0
 
-Paste these over what is in each field. Full replacements, nothing to merge. Every field is under 1,000 characters, which is the limit the single-purpose field shows; if a justification field allows more, the longer versions live in `permission-justifications.md`.
+Full replacements, in the order to do them. Nothing here is a diff; each block replaces everything in its field.
 
-Dashboard: chrome.google.com/webstore/devconsole → PortSmith (ID `jgicdjjebakiobiehdfdbgkfknkidhcd`). Status is Published - public, so this is an update to a live listing.
+**Item:** PortSmith, ID `jgicdjjebakiobiehdfdbgkfknkidhcd`, status Published - public. This is an update to a live listing.
 
-## Order of operations
+**Direct links** (left nav is Build → Status, Package, Store listing, Privacy, Distribution):
 
-1. **Build → Package.** Upload `portsmith-v0.4.0.zip`. Do this first: the "Title from package" and "Summary from package" on the Store listing tab come from the manifest, and both are still 0.3.0 text until the new zip is in.
-2. **Build → Store listing.** Replace the Description. Paste the release notes. Leave the screenshots unless you want to reshoot them (see below).
-3. **Build → Privacy.** Replace the single purpose and all four justifications. Leave the data usage checkboxes alone (see below).
-4. **Submit for review.** Expect the in-depth review the host-permission banner warns about.
+| Tab | Link |
+|---|---|
+| Package | https://chrome.google.com/webstore/devconsole/68ef56eb-937d-4392-8285-2a5113a73a04/jgicdjjebakiobiehdfdbgkfknkidhcd/edit/package |
+| Store listing | https://chrome.google.com/webstore/devconsole/68ef56eb-937d-4392-8285-2a5113a73a04/jgicdjjebakiobiehdfdbgkfknkidhcd/edit/listing |
+| Privacy | https://chrome.google.com/webstore/devconsole/68ef56eb-937d-4392-8285-2a5113a73a04/jgicdjjebakiobiehdfdbgkfknkidhcd/edit/privacy |
 
-Do not submit until `main` is pushed: the privacy policy URL on this listing is served from `main:/docs` and is stale until then.
+Two gates before any of this:
+
+- **`main` has to be pushed first.** The privacy policy URL on this listing is served from `main:/docs`. Until the push, a reviewer clicking it gets the March policy with no Gemini in it.
+- **Do step 1 before step 2.** "Title from package" and "Summary from package" on the Store listing tab are read out of the manifest, and both still show 0.3.0 text until the new zip is uploaded.
 
 ---
 
-## Store listing → Description
+## 1. Upload the package
 
-Replaces the whole description box. The live one has an em dash in it. This one does not, and it covers Gemini, project memory and the six directions, which the 0.3.0 text does not.
+**Where:** Build → Package, https://chrome.google.com/webstore/devconsole/68ef56eb-937d-4392-8285-2a5113a73a04/jgicdjjebakiobiehdfdbgkfknkidhcd/edit/package
+
+Upload `~/portsmith/portsmith-v0.4.0.zip` (219,406 bytes, sha256 `9fad374a...`). After it processes, the Package tab should read version 0.4.0, and the Store listing tab's summary should change from "Migrate AI assistant configurations between platforms" to "Move your AI setup between ChatGPT, Claude and Gemini: projects, GPTs, Gems, files and memory. Private and in-browser."
+
+Nothing to paste in this step.
+
+---
+
+## 2. Description
+
+**Where:** Build → Store listing, https://chrome.google.com/webstore/devconsole/68ef56eb-937d-4392-8285-2a5113a73a04/jgicdjjebakiobiehdfdbgkfknkidhcd/edit/listing. First section, **Product details**, the large box labelled `Description*`, directly under "Summary from package". Select all in the box and paste over it.
+
+The live text has an em dash in it, is written for 0.3.0, and does not mention Gemini memories, project memory or the guided ChatGPT path.
 
 ```
 Switching AI assistants shouldn't mean starting from scratch.
@@ -68,9 +84,11 @@ GOOD TO KNOW
 
 ---
 
-## Privacy → Single purpose description
+## 3. Single purpose description
 
-Replaces the current 54-character line. Longer is better here: the reviewer uses this to judge whether every permission is in service of one job.
+**Where:** Build → Privacy, https://chrome.google.com/webstore/devconsole/68ef56eb-937d-4392-8285-2a5113a73a04/jgicdjjebakiobiehdfdbgkfknkidhcd/edit/privacy. First section, **Single purpose**, the box labelled `Single purpose description*`. It currently reads "Migrates AI assistant configurations between platforms" and shows 54/1,000.
+
+Longer is better here. The reviewer uses this line to judge whether every permission serves one job, and the three-permission case rests on it.
 
 ```
 PortSmith moves a user's own AI assistant setup from one assistant to another. It reads the projects, custom GPTs, Gems, instructions, knowledge files, project memory and saved memories in the account the user is already signed in to, shows them for review, then recreates them on the assistant the user picked. Every feature serves that one job: read the setup, review it, write it to the target. Nothing is sent to PortSmith, which has no servers of its own.
@@ -78,9 +96,11 @@ PortSmith moves a user's own AI assistant setup from one assistant to another. I
 
 ---
 
-## Privacy → storage justification
+## 4. storage justification
 
-This is the one that matters. The live text claims the migration orchestrator uses chrome.storage.local to checkpoint progress. It does not; checkpoints go to IndexedDB through Dexie. You were rejected on 2026-03-03 for requesting storage without using it, so a justification a reviewer can disprove is the worst possible thing to leave in this box.
+**Where:** Same page, https://chrome.google.com/webstore/devconsole/68ef56eb-937d-4392-8285-2a5113a73a04/jgicdjjebakiobiehdfdbgkfknkidhcd/edit/privacy. Second section, **Permission justification**, first box, labelled `storage justification*`. It sits just under the yellow banner about host permissions triggering an in-depth review.
+
+This is the one that matters. The live text says the migration orchestrator uses chrome.storage.local to checkpoint progress. It does not. Checkpoints go to IndexedDB through Dexie (`db.checkpoints.put` in `indexed-db.ts`), and only two files in the tree touch chrome.storage. You were rejected on 2026-03-03 for requesting storage without using it, so leaving a claim a reviewer can disprove in this exact box is the worst available option.
 
 ```
 chrome.storage.local is used in exactly two places, both on the device.
@@ -94,7 +114,9 @@ The side panel and the service worker are separate contexts and both need this d
 
 ---
 
-## Privacy → sidePanel justification
+## 5. sidePanel justification
+
+**Where:** Same page, same **Permission justification** section, the box labelled `sidePanel justification`, below the storage box.
 
 Full replacement.
 
@@ -104,7 +126,9 @@ PortSmith's entire interface is a step-by-step migration wizard in Chrome's side
 
 ---
 
-## Privacy → scripting justification
+## 6. scripting justification
+
+**Where:** Same page, same section, the box labelled `scripting justification`, below the sidePanel box.
 
 Full replacement.
 
@@ -122,9 +146,11 @@ A content script alone cannot do the first two, because it runs in an isolated w
 
 ---
 
-## Privacy → host permission justification
+## 7. Host permission justification
 
-Covers all three hosts in the one field. If the dashboard gives you a separate field per host, `permission-justifications.md` has them split out.
+**Where:** Same page, same section, the last box, labelled for the host permissions (chatgpt.com, claude.ai, gemini.google.com). If the dashboard splits this into one box per host, `permission-justifications.md` has them written separately.
+
+One field covering all three hosts.
 
 ```
 PortSmith reads an AI assistant setup from one of these three sites and writes it to another, acting only on the account the user is already signed in to, from a tab of that site, and only after the user starts a run in the side panel.
@@ -140,23 +166,35 @@ All three navigate client-side, so a narrower match pattern would break a run pa
 
 ---
 
+## 8. Check, then submit
+
+**Where:** Build → Privacy, https://chrome.google.com/webstore/devconsole/68ef56eb-937d-4392-8285-2a5113a73a04/jgicdjjebakiobiehdfdbgkfknkidhcd/edit/privacy, scrolled to **Data usage**, then the blue **Submit for review** button at the top right of any tab.
+
+Confirm the data usage boxes still read: Authentication information checked, Website content checked, everything else unchecked. Confirm the three "I certify" boxes are checked. Then Submit.
+
+Expect a slower review than usual. The banner on the Privacy tab says the host permissions may trigger an in-depth review.
+
+---
+
 ## Leave these alone
 
-**Data usage checkboxes.** Currently checked: Authentication information, Website content. Everything else unchecked. That is the right set and it already passed review for 0.3.0.
+**Data usage checkboxes.** Authentication information and Website content, both already checked, everything else clear. That set already passed review for 0.3.0.
 
-- Website content is correct: instructions, knowledge files, project memory and saved memories are all site content.
-- Authentication information is correct and worth keeping. PortSmith reads ChatGPT's session token and Gemini's page token to make requests, and the privacy policy says so under "What PortSmith reads". Unchecking it right after a permissions rejection would be the wrong direction.
-- Personally identifiable information is the only arguable one. Saved memories are free text and often contain names and places. It is unchecked today and 0.3.0 passed that way, and PortSmith never asks for or targets personal information, so leaving it unchecked is defensible. Checking it costs nothing on the listing except a line on the public detail page, and closes a gap a reviewer could open. Your call; no change is the lower-risk move.
+- Website content is right: instructions, knowledge files, project memory and saved memories are all site content.
+- Authentication information is right and worth keeping. PortSmith reads ChatGPT's session token and Gemini's page token to make its requests, and the privacy policy says so under "What PortSmith reads". Unchecking it right after a permissions rejection points the wrong way.
+- Personally identifiable information is the only arguable one, and it is unchecked. Saved memories are free text and often carry names and places. PortSmith never asks for or targets personal information and 0.3.0 passed this way, so unchecked is defensible. Checking it costs one line on the public detail page and closes a gap a reviewer could open. Your call. No change is the lower-risk move.
 
-**Privacy policy URL.** Unchanged: https://hekleiman.github.io/portsmith/privacy-policy.html
+**Privacy policy URL.** Unchanged: https://hekleiman.github.io/portsmith/privacy-policy.html. I did not see this field on the Privacy tab; on this dashboard it may sit under Account → Profile at the publisher level. Worth a look while you are in there, since it is what a reviewer clicks.
 
-**Screenshots.** Five are uploaded and the store does not require new ones for an update. They are from the 0.3.0 listing and show the old UI, so 0.4.0 screens (the review page with the project memory badge, the results page) are not represented. That is a quality call, not a blocker. If you do reshoot, `screenshot-checklist.md` has the seven shots and the five to upload.
+**Screenshots.** Build → Store listing, **Graphic assets** → Screenshots. Five are uploaded and the store does not require new ones for an update, so these are not blocking. They are the 0.3.0 shots and do not show the 0.4.0 screens (the review page with the project memory badge, the results page). If you do reshoot, `screenshot-checklist.md` has the seven shots and which five to upload.
+
+**Release notes.** I could not confirm a "Changes in this version" field on your dashboard. If one appears during submission, the text is in `store-listing.md` under "What's New in v0.4.0".
 
 ---
 
 ## Before you press Submit
 
-- [ ] `main` pushed, then reload the privacy policy URL and confirm it says "version 0.4.0" and mentions Gemini.
-- [ ] `portsmith-v0.4.0.zip` uploaded and the version reads 0.4.0.
+- [ ] `main` pushed, then reload https://hekleiman.github.io/portsmith/privacy-policy.html and confirm it says "version 0.4.0" and mentions Gemini.
+- [ ] Package tab reads 0.4.0 and the summary changed.
 - [ ] Description, single purpose and all four justifications replaced.
 - [ ] Test items deleted: Claude project "PortSmith test (delete me)", Gemini Gem "PortSmith test Gem (delete me)".
