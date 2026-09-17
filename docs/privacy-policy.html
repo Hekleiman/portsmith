@@ -117,167 +117,159 @@
 <body>
   <div class="container">
     <header>
-      <h1>PortSmith &mdash; Privacy Policy</h1>
-      <p class="subtitle">Chrome Extension for AI Assistant Migration</p>
-      <p class="effective-date">Effective date: March 1, 2026</p>
+      <h1>PortSmith Privacy Policy</h1>
+      <p class="subtitle">Chrome extension for moving your AI assistant setup between ChatGPT, Claude and Gemini</p>
+      <p class="effective-date">Effective date: September 16, 2026 (version 0.4.0)</p>
     </header>
 
-    <h2>What PortSmith Does</h2>
+    <h2>What PortSmith does</h2>
     <p>
-      PortSmith is a Chrome extension that helps you migrate your AI assistant configurations &mdash; such as projects, custom GPTs, memory, and custom instructions &mdash; from ChatGPT to Claude. All processing happens entirely on your device. PortSmith does not send your data to any remote server.
+      PortSmith copies your AI assistant setup (projects, custom GPTs, Gems, instructions, knowledge files and memory) from one of ChatGPT, Claude or Gemini to another. Everything runs inside your browser. PortSmith has no servers, and it never sends your data to its developer or to anyone else.
     </p>
 
-    <h2>What Data Is Accessed</h2>
+    <h2>What PortSmith reads</h2>
     <p>
-      PortSmith reads data from <strong>chatgpt.com</strong> and interacts with <strong>claude.ai</strong> to perform the migration. Here is exactly what is accessed on each platform:
+      PortSmith only works with the accounts you are already signed in to in Chrome, and only when you start an extraction or a migration in its side panel.
     </p>
 
-    <p><strong>Read from ChatGPT (chatgpt.com):</strong></p>
+    <p><strong>From ChatGPT (chatgpt.com), when ChatGPT is the source:</strong></p>
     <ul>
-      <li><strong>Custom GPT configurations:</strong> name, description, system instructions, conversation starters, and knowledge file names</li>
-      <li><strong>Projects:</strong> name, description, project instructions, and knowledge file names</li>
-      <li><strong>Memory items:</strong> the text content of each saved memory entry</li>
-      <li><strong>Custom instructions:</strong> your "about you" text and response preference text</li>
-      <li><strong>Session token:</strong> your existing ChatGPT session token is used temporarily (in-memory only, never stored to disk) to authenticate API calls to ChatGPT's own backend for reading project data</li>
+      <li><strong>Custom GPTs:</strong> name, description, instructions, conversation starters and knowledge file names</li>
+      <li><strong>Projects:</strong> name, instructions and knowledge files, including copies of the files themselves</li>
+      <li><strong>Memory and custom instructions:</strong> the saved memories and your custom instruction text, when those settings pages are open</li>
+      <li><strong>Your ChatGPT data export (optional):</strong> if you add the export file, PortSmith reads it on your device to find conversation titles and which GPT or project each conversation belongs to</li>
+      <li><strong>Session token:</strong> ChatGPT's own session token is used to call ChatGPT's API from the ChatGPT tab. It is kept in memory for a few minutes and never saved</li>
     </ul>
 
-    <p><strong>Written to Claude (claude.ai):</strong></p>
+    <p><strong>From Claude (claude.ai), when Claude is the source:</strong></p>
     <ul>
-      <li><strong>Project creation forms:</strong> project name and description</li>
-      <li><strong>Project instructions:</strong> translated instruction text entered into the instructions field</li>
-      <li><strong>Clipboard:</strong> when automatic form-filling fails, instructions are copied to your clipboard so you can paste them manually</li>
+      <li><strong>Projects:</strong> name, description, instructions and dates</li>
+      <li><strong>Project knowledge:</strong> the text of project documents, and the names of other project files</li>
+      <li><strong>Project memory (optional):</strong> what Claude remembers from chats in each project</li>
+    </ul>
+
+    <p><strong>From Gemini (gemini.google.com), when Gemini is the source:</strong></p>
+    <ul>
+      <li><strong>Gems:</strong> name, description and instructions. Gemini's page token is used for the request and is not saved</li>
     </ul>
 
     <p>
-      PortSmith does not read your conversation history, uploaded files' contents, billing information, account credentials, or any data unrelated to AI assistant configurations.
+      PortSmith does not read your chat messages in any assistant, your billing details, your passwords or anything unrelated to your assistant setup.
     </p>
 
-    <h2>What Data Is Stored Locally</h2>
-    <p>
-      All data stays on your device. PortSmith uses two local storage mechanisms provided by Chrome:
-    </p>
-
-    <p><strong>IndexedDB</strong> (via the Dexie.js library):</p>
+    <h2>What PortSmith writes</h2>
+    <p>Only to the platform you choose as the target, and only after you start the migration:</p>
     <ul>
-      <li><strong>Migration manifests:</strong> a structured representation of your extracted configurations (the same data listed above), used to display the review screen and drive the import process</li>
-      <li><strong>File records:</strong> metadata and blobs for any files involved in the migration</li>
-      <li><strong>Checkpoints:</strong> snapshots of migration progress (which step you're on, which workspaces are completed) so you can resume an interrupted migration</li>
+      <li><strong>Claude:</strong> creates projects, sets their instructions, adds knowledge documents and files, and adds a project memory document. It then reads the new projects back to check them</li>
+      <li><strong>Gemini:</strong> creates Gems with their name, description and instructions</li>
+      <li><strong>ChatGPT:</strong> nothing. PortSmith shows the steps and the text to copy, and you create the projects yourself</li>
+    </ul>
+    <p>
+      Copy buttons put text on your clipboard, and download buttons save files to your computer, only when you click them.
+    </p>
+
+    <h2>What PortSmith stores on your device</h2>
+    <p>PortSmith uses Chrome's local storage. Nothing is synced across devices.</p>
+
+    <p><strong>IndexedDB:</strong></p>
+    <ul>
+      <li><strong>Extracted setups:</strong> the projects, GPTs, Gems, instructions and memory it read, so you can review and edit them</li>
+      <li><strong>File copies:</strong> the content of the knowledge files it copied, so it can upload them or offer them as downloads</li>
+      <li><strong>Progress:</strong> which items were already moved, so an interrupted migration can resume without creating duplicates</li>
     </ul>
 
     <p><strong>chrome.storage.local:</strong></p>
     <ul>
-      <li><strong>User preferences:</strong> LLM mode setting, last-used source and target platforms, sidebar display state</li>
-      <li><strong>Guided migration progress:</strong> which migration steps you've marked as completed</li>
+      <li><strong>Preferences:</strong> the platforms you used last</li>
     </ul>
 
+    <h2>What PortSmith sends over the network</h2>
     <p>
-      No data is stored in any cloud service, synced across devices, or made accessible to any third party.
+      PortSmith only talks to chatgpt.com, claude.ai and gemini.google.com, using your existing sessions, from the tabs of those sites. It has no analytics, telemetry, crash reporting or advertising, and no servers of its own.
     </p>
 
-    <h2>What Data Is Transmitted</h2>
-    <p>
-      <strong>None.</strong> PortSmith does not operate any remote servers. There is no analytics, no telemetry, no crash reporting, no usage tracking, and no data collection of any kind.
-    </p>
-    <p>
-      The only network requests PortSmith initiates are same-origin API calls made within the ChatGPT tab (to <code>chatgpt.com/api/auth/session</code> and <code>chatgpt.com/backend-api/gizmos/...</code>) to read your project data using your existing authenticated session. These requests go directly from your browser to ChatGPT's servers &mdash; PortSmith has no servers that sit in between.
-    </p>
-
-    <h2>Permissions and Why They're Needed</h2>
-    <p>
-      PortSmith requests only the permissions required for its core functionality:
-    </p>
-
+    <h2>Permissions and why they are needed</h2>
     <table>
       <thead>
         <tr>
           <th>Permission</th>
-          <th>Why it's needed</th>
+          <th>Why it is needed</th>
         </tr>
       </thead>
       <tbody>
         <tr>
           <td><code>storage</code></td>
-          <td>Save user preferences and guided migration progress to <code>chrome.storage.local</code>. This is a local-only storage API &mdash; no data leaves your device.</td>
+          <td>Remember your last-used platforms in <code>chrome.storage.local</code>.</td>
         </tr>
         <tr>
           <td><code>sidePanel</code></td>
-          <td>Display the migration wizard in Chrome's Side Panel, which stays open alongside ChatGPT and Claude pages during the migration process.</td>
+          <td>Show the migration wizard in Chrome's side panel next to the assistant you are working with.</td>
         </tr>
         <tr>
           <td><code>scripting</code></td>
-          <td>Execute small scripts in the context of ChatGPT pages to read your session token and project data via ChatGPT's same-origin API, and to perform trusted click events on Claude's UI during autofill.</td>
-        </tr>
-        <tr>
-          <td><code>clipboardWrite</code></td>
-          <td>Copy translated instructions to your clipboard as a fallback when automatic form-filling cannot complete.</td>
-        </tr>
-        <tr>
-          <td><code>windows</code></td>
-          <td>Bring the browser window containing the Claude tab to the foreground during the autofill process so you can see the migration happening.</td>
+          <td>Run ChatGPT API requests inside the ChatGPT tab, click through ChatGPT and Claude pages when their APIs are unavailable, and add PortSmith's page scripts to tabs that were already open when it was installed or updated.</td>
         </tr>
       </tbody>
     </table>
 
-    <p><strong>Host permissions:</strong></p>
+    <p><strong>Site access:</strong></p>
     <table>
       <thead>
         <tr>
-          <th>Host pattern</th>
-          <th>Why it's needed</th>
+          <th>Site</th>
+          <th>Why it is needed</th>
         </tr>
       </thead>
       <tbody>
         <tr>
           <td><code>https://chatgpt.com/*</code></td>
-          <td>Inject the content script that reads your Custom GPT, Project, Memory, and Custom Instructions data from the ChatGPT DOM and API.</td>
+          <td>Read your GPTs, projects, files, memory and custom instructions.</td>
         </tr>
         <tr>
           <td><code>https://claude.ai/*</code></td>
-          <td>Inject the content script that fills Claude project creation forms, enters instructions, and verifies created projects.</td>
+          <td>Read your Claude projects, or create projects when Claude is the target.</td>
         </tr>
         <tr>
-          <td><code>https://chat.openai.com/*</code> (optional)</td>
-          <td>Requested only if you grant it &mdash; provides compatibility with the legacy ChatGPT domain.</td>
+          <td><code>https://gemini.google.com/*</code></td>
+          <td>Read your Gems, or create Gems when Gemini is the target.</td>
         </tr>
       </tbody>
     </table>
 
-    <h2>Third-Party Services</h2>
+    <h2>Third-party services</h2>
     <p>
-      PortSmith does not use any third-party services. There are no analytics providers, no advertising networks, no external APIs, and no server-side components. The extension is entirely self-contained.
+      None. PortSmith uses no analytics providers, advertising networks or outside APIs. The only services involved are the AI assistants you choose, under their own privacy policies.
     </p>
 
-    <h2>Data Retention and Deletion</h2>
-    <p>
-      All data PortSmith stores remains on your device in your browser's local storage. It persists until:
-    </p>
+    <h2>Keeping and deleting your data</h2>
+    <p>Data PortSmith saved stays in your browser until you delete it. You can:</p>
     <ul>
-      <li>You uninstall the PortSmith extension, which removes all stored data automatically</li>
-      <li>You clear your browser's site data or extension storage</li>
-      <li>You complete a migration and the extension clears its checkpoints</li>
+      <li>Click <strong>Delete the data PortSmith extracted</strong> at the end of a migration</li>
+      <li>Click <strong>Delete saved data</strong> on PortSmith's first screen, which removes everything it saved</li>
+      <li>Remove the extension, which deletes all of its storage</li>
     </ul>
     <p>
-      There is no remote data to delete because no data is ever transmitted off your device.
+      Projects and Gems that PortSmith created belong to your Claude or Gemini account. Delete them there if you no longer want them.
     </p>
 
-    <h2>Children's Privacy</h2>
+    <h2>Children's privacy</h2>
     <p>
-      PortSmith is not directed at children under the age of 13. The extension is a productivity tool intended for users who have existing accounts on ChatGPT and Claude.
+      PortSmith is not directed at children under 13. It is a productivity tool for people who already have accounts on these AI assistants.
     </p>
 
-    <h2>Changes to This Policy</h2>
+    <h2>Changes to this policy</h2>
     <p>
-      If this privacy policy is updated, the changes will be reflected on this page with a revised effective date. We encourage you to review this page periodically.
+      Updates will be posted on this page with a new effective date.
     </p>
 
     <h2>Contact</h2>
     <p>
-      If you have questions about this privacy policy or PortSmith's data practices, contact us at:<br>
+      Questions about this policy or PortSmith's data practices:<br>
       <strong>hekleiman@gmail.com</strong>
     </p>
 
     <footer>
-      <p>PortSmith v0.1.0 &mdash; Privacy Policy &mdash; Last updated March 1, 2026</p>
+      <p>PortSmith v0.4.0 privacy policy. Last updated September 16, 2026.</p>
     </footer>
   </div>
 </body>

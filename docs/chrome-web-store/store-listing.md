@@ -1,98 +1,92 @@
-# Chrome Web Store Listing — PortSmith
+# Chrome Web Store Listing: PortSmith (v0.4.0)
 
 ## Extension Name
 
 **PortSmith**
 
-> Must match the `"name"` field in manifest.json, which is currently `"PortSmith"`.
+> Must match `"name"` in manifest.json.
 
 ---
 
 ## Short Description
 
-> Max 132 characters.
+> Max 132 characters. Keep it in sync with `"description"` in manifest.json.
 
 ```
-Move your AI setup between ChatGPT, Claude, and Gemini — projects, GPTs, Gems, memory, and more. Private, in-browser, no account.
+Move your AI setup between ChatGPT, Claude and Gemini: projects, GPTs, Gems, files and memory. Private and in-browser.
 ```
-
-Character count: 131
 
 ---
 
 ## Full Description
 
-> Target: 500–800 words. Paste this into the CWS "Detailed description" field.
+> Paste into the CWS "Detailed description" field.
 
 ```
 Switching AI assistants shouldn't mean starting from scratch.
 
-If you've built Custom GPTs in ChatGPT, set up Projects in Claude, or created Gems in Gemini, you know how much work goes into configuring an AI assistant. PortSmith moves all of that between platforms in minutes — so you can try something new without losing the setup you've already invested in.
+If you've built custom GPTs or projects in ChatGPT, projects in Claude, or Gems in Gemini, you know how much work goes into them. PortSmith moves that setup to another assistant, so you can switch or use more than one without rebuilding everything by hand.
 
-WHAT PORTSMITH MIGRATES
+WHAT PORTSMITH MOVES
 
-PortSmith handles the parts of each platform that are hardest to move manually:
+- From ChatGPT: custom GPTs, projects with their instructions and knowledge files, saved memories and custom instructions
+- From Claude: projects with their instructions, knowledge documents and project memory
+- From Gemini: Gems with their instructions
+- Project memory: what the assistant learned from chats inside a project comes along as a document in the new project
 
-- ChatGPT: Custom GPTs (name, description, instructions, conversation starters, knowledge files), Projects, Memory items, and Custom Instructions
-- Claude: Projects (name, description, system instructions)
-- Gemini: Gems (name, description, system instructions)
+WHERE IT CAN GO
 
-All six migration directions work: ChatGPT ↔ Claude, ChatGPT ↔ Gemini, Claude ↔ Gemini.
+- Into Claude, automatically: PortSmith creates each project, sets the instructions, uploads the files and adds the project memory, then checks the result
+- Into Gemini, automatically: PortSmith creates each Gem, then gives you the files to add to its knowledge
+- Into ChatGPT, step by step: PortSmith shows each step with copy and download buttons
+
+Your saved memories and custom instructions go through Claude's and Gemini's own memory import, in one paste.
 
 HOW IT WORKS
 
-PortSmith runs entirely inside your browser — no servers, no accounts, no data leaves your device.
+1. Read: open your current assistant in a tab. PortSmith reads your setup through the site's own interface, using the account you're already signed in to.
+2. Review: see everything it found, choose what to move, and edit instructions or project memory first.
+3. Move: pick automatic, step-by-step, or automatic with a confirmation before each item. Anything PortSmith can't do for you becomes a clear manual step, with the text to copy and the files to download.
 
-1. Extract: Pick your source platform and open it in a tab. PortSmith reads your configurations directly from the page via the platform's own API. For ChatGPT, you can also upload a data export ZIP file. All parsing happens locally.
+At the end you get an honest summary: what was created, what was checked, and what still needs you.
 
-2. Review: PortSmith shows you everything it found: workspaces, memory items, knowledge files, and any compatibility notes. You can edit names, toggle items on or off, and see exactly what will be migrated before anything is created.
+PRIVATE BY DESIGN
 
-3. Migrate: Choose how PortSmith delivers your data to the target platform. Autofill mode fills in forms automatically. Guided mode gives you step-by-step instructions. Hybrid mode auto-fills with your confirmation at each step. If autofill can't reach a field, PortSmith copies the text to your clipboard so you can paste it manually.
+- Runs entirely in your browser. PortSmith has no servers.
+- No analytics, tracking or ads.
+- No sign-up and no API keys.
+- Your data only travels between your browser and the assistants you already use.
+- One click deletes everything PortSmith saved.
 
-After migration, PortSmith verifies that your configurations were created successfully and gives you a summary of what was moved and what needs manual follow-up.
+SAFE TO STOP AND RESUME
 
-PRIVACY FIRST
+PortSmith records its progress as it goes. If the browser closes mid-migration, it picks up where it left off and never creates the same project twice.
 
-PortSmith processes everything on your device:
+GOOD TO KNOW
 
-- No remote servers. The extension does not transmit your data anywhere.
-- No analytics or telemetry. There is no tracking of any kind.
-- No account required. You don't sign up for anything — just install and use.
-- No API keys needed. PortSmith uses rule-based translation, not AI models.
-
-The only network activity is between your browser and the AI platforms you're already logged into. PortSmith sits in the middle of your own browser tabs — it never phones home.
-
-WHO IT'S FOR
-
-- Anyone switching between ChatGPT, Claude, and Gemini who doesn't want to start over
-- People who use multiple platforms and want matching configurations
-- Teams migrating between AI providers who don't want to recreate dozens of projects by hand
-- Anyone who has put hours into custom instructions and doesn't want to lose that work
-
-SUPPORTED PLATFORMS
-
-Version 0.3 supports all six migration directions between ChatGPT, Claude, and Gemini. Extract from any platform, import to any other.
-
-CRASH RECOVERY
-
-If your browser closes or something goes wrong mid-migration, PortSmith saves checkpoints after each workspace. Reopen the extension and it offers to resume where you left off.
-
-OPEN AND TRANSPARENT
-
-PortSmith's privacy policy is available at the link below. Every permission the extension requests is documented with an explanation of exactly why it's needed and what it does.
+- Chat history doesn't move.
+- GPT Actions, image generation and other platform-specific tools can't be copied. PortSmith points these out.
+- Gemini's memory import isn't available in every country or for every account type.
 ```
 
 ---
 
-## What's New in v0.3.0
+## What's New in v0.4.0
 
 > Paste into the CWS "Changes in this version" field.
 
 ```
-- NEW: Gemini support — extract Gems and create Gems in both directions
-- NEW: Claude extraction — read existing Projects from your Claude account
-- All 6 migration directions now work: ChatGPT ↔ Claude, ChatGPT ↔ Gemini, Claude ↔ Gemini
-- All three platforms enabled as both source and target (no more "Coming Soon")
+- Fixed: projects and Gems could be created twice
+- Fixed: Claude projects came through without their instructions
+- Fixed: knowledge file uploads to Claude
+- Fixed: instruction adjustments could change their meaning
+- New: project memory moves with each project
+- New: memories and custom instructions go through Claude's and Gemini's memory import
+- New: step-by-step migration into ChatGPT
+- New: files the target can't take are offered as downloads
+- New: resuming never duplicates work, and Stop stops right away
+- New: a results page that matches your target, with a "Delete saved data" button
+- Fewer permissions, and proper icons
 ```
 
 ---
@@ -115,4 +109,4 @@ PortSmith's privacy policy is available at the link below. Every permission the 
 2. `chatgpt to claude`
 3. `gemini gems`
 4. `custom gpt`
-5. `ai assistant`
+5. `project memory`
