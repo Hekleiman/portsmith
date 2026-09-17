@@ -183,6 +183,7 @@
     <p><strong>chrome.storage.local:</strong></p>
     <ul>
       <li><strong>Preferences:</strong> the platforms you used last</li>
+      <li><strong>Saved Gemini memories:</strong> the IDs Gemini returned for memories PortSmith created, so resuming a migration does not save them a second time. The IDs only, never the text.</li>
     </ul>
 
     <h2>What PortSmith sends over the network</h2>
@@ -201,7 +202,7 @@
       <tbody>
         <tr>
           <td><code>storage</code></td>
-          <td>Remember your last-used platforms in <code>chrome.storage.local</code>.</td>
+          <td>Remember your last-used platforms, and the IDs of Gemini memories already saved, in <code>chrome.storage.local</code>.</td>
         </tr>
         <tr>
           <td><code>sidePanel</code></td>
