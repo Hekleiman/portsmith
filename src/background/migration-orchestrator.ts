@@ -653,6 +653,7 @@ export class MigrationOrchestrator {
       for (const [id, first] of sameAs) if (done.has(first)) done.add(id);
     };
 
+    const reasons = new Map<string, number>();
     const CHUNK = 30;
     for (let i = 0; tabId !== null && i < todo.length; i += CHUNK) {
       const chunk = todo.slice(i, i + CHUNK);
@@ -663,8 +664,13 @@ export class MigrationOrchestrator {
         if (!this.isCurrent(run)) return;
         results.forEach((r, j) => {
           const item = chunk[j];
-          if (r.success && item) done.add(item.id);
-          else if (item) console.warn(`[PortSmith] Memory not saved: ${r.error ?? "unknown error"}`);
+          if (!item) return;
+          if (r.success) done.add(item.id);
+          else {
+            const reason = r.error ?? "no reason given";
+            reasons.set(reason, (reasons.get(reason) ?? 0) + 1);
+            console.warn(`[PortSmith] Memory not saved (${reason}): ${item.text.slice(0, 80)}`);
+          }
         });
       } catch (err) {
         if (!this.isCurrent(run)) return;
@@ -679,7 +685,15 @@ export class MigrationOrchestrator {
 
     markCopies();
     const saved = wanted.filter((w) => done.has(w.id)).length;
-    this.memoryAutoSaved = { saved, total: wanted.length };
+    const topReasons = [...reasons.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([reason, count]) => `${count}× ${reason}`);
+    this.memoryAutoSaved = {
+      saved,
+      total: wanted.length,
+      ...(topReasons.length > 0 ? { reasons: topReasons } : {}),
+    };
     this.currentSteps = [
       {
         id: stepId,
@@ -699,6 +713,7 @@ export class MigrationOrchestrator {
       this.sourceLabel(),
       leftCustom,
       manifest.source.platform,
+      topReasons,
     );
     if (saved === wanted.length) this.memoryImported = true;
   }

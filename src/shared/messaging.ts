@@ -218,7 +218,7 @@ export interface OrchestratorStatus {
   /** Steps an automatic run left for the user instead of waiting, per workspace */
   leftoverSteps: Record<string, MigrationStepFallback[]>;
   /** Memories PortSmith saved to the target by itself (null: it didn't try) */
-  memoryAutoSaved: { saved: number; total: number } | null;
+  memoryAutoSaved: { saved: number; total: number; reasons?: string[] } | null;
   /** Whether the user finished the memory steps (null: there were none yet) */
   memoryImported: boolean | null;
   /** Warning when multiple Claude tabs are detected */

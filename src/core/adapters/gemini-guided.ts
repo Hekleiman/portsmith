@@ -169,6 +169,8 @@ export function generateGeminiMemoryInstructions(
   sourceLabel = "your previous assistant",
   customInstructions = "",
   sourcePlatform?: SourcePlatform,
+  /** What Gemini said about the entries it refused, most common first. */
+  refusalReasons: string[] = [],
 ): MigrationStepFallback[] {
   const chatImport = buildGeminiChatImportStep(sourcePlatform);
   const block = renderMemoryImportText(items, sourceLabel, customInstructions);
@@ -192,7 +194,12 @@ export function generateGeminiMemoryInstructions(
     {
       id: "memory-paste",
       title: `Paste ${what}`,
-      description: 'Paste the text below into the text field and click "Add memory".',
+      description: [
+        'Paste the text below into the text field and click "Add memory".',
+        ...(refusalReasons.length > 0
+          ? ["", "Gemini refused to save these one by one:", ...refusalReasons.map((r) => `• ${r}`)]
+          : []),
+      ].join("\n"),
       copyBlocks: [{ label: "Memories", content: block }],
       actionHint: 'Paste, then click "Add memory"',
     },

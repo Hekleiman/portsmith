@@ -301,6 +301,21 @@ export async function uploadKnowledgeFile(
   }
 }
 
+/** Short description of a reply, for a failure message. */
+function describeFrames(frames: unknown[]): string {
+  const parts: string[] = [];
+  for (const frame of frames) {
+    if (!Array.isArray(frame)) continue;
+    const tag = frame[0];
+    if (tag === "wrb.fr") {
+      parts.push(`body ${JSON.stringify(frame[2] ?? null).slice(0, 200)}`);
+    } else if (tag === "er") {
+      parts.push(`error ${JSON.stringify(frame.slice(1, 4)).slice(0, 200)}`);
+    }
+  }
+  return parts.join("; ") || "empty reply";
+}
+
 /** Everything in "Your instructions for Gemini", page by page. */
 export async function listMemories(): Promise<
   { success: true; entries: SavedInfoEntry[] } | { success: false; error: string }
@@ -343,13 +358,24 @@ export async function saveMemories(
       const entry = parseCreateSavedInfoResponse(frames);
       results[index] = entry
         ? { text, success: true, id: entry.id }
-        : { text, success: false, error: "Gemini didn't confirm it was saved" };
+        : {
+            text,
+            success: false,
+            error: `Gemini's reply had no saved entry: ${describeFrames(frames)}`,
+          };
     } catch (err) {
       results[index] = {
         text,
         success: false,
         error: err instanceof Error ? err.message : "request failed",
       };
+    }
+    const failed = results[index];
+    if (failed && !failed.success) {
+      // Logged here so the reason is visible in the Gemini tab's console.
+      console.warn(
+        `[PortSmith] Gemini didn't save a memory (${failed.error ?? "no reason given"}): ${text.slice(0, 80)}`,
+      );
     }
   };
 
