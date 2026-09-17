@@ -26,7 +26,6 @@ import {
 } from "@/core/transform/project-memory";
 import { textToBase64 } from "@/shared/encoding";
 import {
-  SAVED_INFO_API_MAX_LENGTH,
   SAVED_INFO_MAX_LENGTH,
   savedInfoKey,
   splitSavedInfoText,
@@ -629,9 +628,6 @@ export class MigrationOrchestrator {
       }
       if (!this.isCurrent(run)) return;
     }
-    // An account saved by a build that kept no record: work out what is
-    // already there by similarity, once, before sending anything.
-    const backfilling = storedIdCount === 0;
     const done = new Set(this.savedMemoryIds);
     const stepId = "memory-save";
     const progress = (): void => {
@@ -661,7 +657,6 @@ export class MigrationOrchestrator {
 
     // Skip what's already in Gemini (a repeated run, or added by hand).
     let listedEntries = 0;
-    let backfilled = 0;
     let existingKeys: Set<string> | null = null;
     if (tabId !== null) {
       try {
@@ -676,18 +671,6 @@ export class MigrationOrchestrator {
             if (parts.every((part) => keys.has(savedInfoKey(part)))) done.add(id);
           }
 
-          // One-time migration for an account written to by a build that kept
-          // no record of what it saved. Those builds sent every memory, and
-          // the only deterministic refusal is text over the create limit, so
-          // anything that fits is already in the account. A non-empty list is
-          // required: an empty one means nothing was ever saved.
-          if (backfilling && listedEntries > 0) {
-            for (const w of wanted) {
-              if (done.has(w.id) || w.text.length > SAVED_INFO_API_MAX_LENGTH) continue;
-              done.add(w.id);
-              backfilled++;
-            }
-          }
         } else {
           console.warn(`[PortSmith] Couldn't list Gemini's saved info: ${existing.error ?? "unknown error"}`);
         }
@@ -713,17 +696,9 @@ export class MigrationOrchestrator {
 
     console.log(
       `[PortSmith] Gemini memories: ${listedEntries} entries in Gemini's list, ` +
-        `${backfilled} marked as already saved by the one-time backfill, ` +
+        `${storedIdCount} recorded by earlier runs, ` +
         `${partsLeft.size} to send as ${todo.length} entr${todo.length === 1 ? "y" : "ies"}.`,
     );
-
-    // Record what the backfill found before sending anything, so a run that
-    // is interrupted does not start over and re-send what is already there.
-    if (backfilling && this.manifestId && done.size > 0) {
-      this.savedMemoryIds = [...done];
-      await saveSavedMemoryIds(this.manifestId, this.geminiAccount, this.savedMemoryIds);
-      if (!this.isCurrent(run)) return;
-    }
     const markCopies = (): void => {
       for (const [id, first] of sameAs) if (done.has(first)) done.add(id);
     };

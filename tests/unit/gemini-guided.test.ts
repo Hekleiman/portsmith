@@ -23,37 +23,27 @@ function memoryItem(fact: string): MemoryItem {
 const ITEMS = [memoryItem("Likes short answers")];
 
 describe("buildGeminiChatImportStep", () => {
-  it("names ChatGPT's export path for a ChatGPT source", () => {
+  it("gives ChatGPT users a button per page instead of directions", () => {
     const step = buildGeminiChatImportStep("chatgpt");
-    expect(step).not.toBeNull();
     expect(step?.title).toBe("Bring your chat history (optional)");
     expect(step?.optional).toBe(true);
-    expect(step?.description).toContain("In ChatGPT");
-    expect(step?.description).toContain("Data controls");
-    expect(step?.description).toContain('"Confirm export"');
-    expect(step?.description).not.toContain("Confirm Export");
-    expect(step?.description).toContain("by email or text message");
-    expect(step?.description).toContain("up to 7 days");
-    expect(step?.description).toContain("expires 24 hours after you receive it");
-    expect(step?.description).not.toContain("Privacy");
+    expect(step?.actions?.map((a) => a.label)).toEqual([
+      "Open ChatGPT's data export",
+      "Open Gemini's import page",
+    ]);
+    expect(step?.actions?.[0]?.url).toContain("chatgpt.com");
+    expect(step?.actions?.[0]?.note).toContain('"Confirm export"');
+    expect(step?.actions?.[0]?.note).toContain("up to 7 days");
+    expect(step?.actions?.[1]?.url).toBe(GEMINI_IMPORT_URL);
+    expect(step?.actions?.[1]?.note).toContain('Under "Import chats", click "Add"');
   });
 
-  it("names Claude's export path for a Claude source", () => {
+  it("points Claude users at Claude's export page", () => {
     const step = buildGeminiChatImportStep("claude");
-    expect(step?.description).toContain("In Claude");
-    expect(step?.description).toContain("Settings and Privacy");
-    expect(step?.description).toContain("expires after 24 hours");
-    expect(step?.description).not.toContain("Data controls");
-  });
-
-  it("explains the upload and where import isn't available", () => {
-    const step = buildGeminiChatImportStep("claude");
+    expect(step?.actions?.[0]?.label).toBe("Open Claude's data export");
+    expect(step?.actions?.[0]?.url).toContain("claude.ai/settings");
+    expect(step?.actions?.[0]?.note).toContain("expires after 24 hours");
     expect(step?.link).toBe(GEMINI_IMPORT_URL);
-    expect(step?.description).toContain('"Import memory to Gemini"');
-    expect(step?.description).toContain('Under "Import chats", click "Add"');
-    expect(step?.description).toContain(".zip");
-    expect(step?.description).toContain("EEA, Switzerland or the UK");
-    expect(step?.description).not.toContain("\u2014");
   });
 
   it("returns nothing for sources Gemini can't import", () => {
@@ -62,7 +52,6 @@ describe("buildGeminiChatImportStep", () => {
     expect(buildGeminiChatImportStep(undefined)).toBeNull();
   });
 });
-
 describe("generateGeminiMemoryInstructions with chat history", () => {
   it("adds the chat step after the memory steps", () => {
     const steps = generateGeminiMemoryInstructions(ITEMS, "ChatGPT", "", "chatgpt");
@@ -98,7 +87,7 @@ describe("buildMemoryStepsForTarget", () => {
     const gemini = buildMemoryStepsForTarget(chatgptManifest, "gemini");
     const last = gemini[gemini.length - 1];
     expect(last?.id).toBe("memory-chat-history");
-    expect(last?.description).toContain("In ChatGPT");
+    expect(last?.actions?.[0]?.url).toContain("chatgpt.com");
 
     const claude = buildMemoryStepsForTarget(chatgptManifest, "claude");
     expect(claude.some((s) => s.id === "memory-chat-history")).toBe(false);
@@ -107,6 +96,6 @@ describe("buildMemoryStepsForTarget", () => {
   it("uses the Claude export path for a Claude manifest", () => {
     const steps = buildMemoryStepsForTarget(claudeManifest, "gemini");
     expect(steps.map((s) => s.id)).toEqual(["memory-chat-history"]);
-    expect(steps[0]?.description).toContain("In Claude");
+    expect(steps[0]?.actions?.[0]?.url).toContain("claude.ai");
   });
 });

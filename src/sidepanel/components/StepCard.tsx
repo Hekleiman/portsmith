@@ -60,8 +60,37 @@ export default function StepCard({
             </div>
           )}
 
+          {/* Buttons that open each page the step needs */}
+          {step.actions && step.actions.length > 0 && (
+            <ol className="mt-3 space-y-2">
+              {step.actions.map((action, i) => (
+                <li key={action.url + action.label} className="flex items-start gap-2">
+                  <span
+                    className="mt-1 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-slate-200 text-[10px] font-bold text-slate-700"
+                    aria-hidden="true"
+                  >
+                    {i + 1}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <a
+                      href={action.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-block rounded-lg bg-blue-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-800"
+                    >
+                      {action.label}
+                    </a>
+                    {action.note && (
+                      <p className="mt-1 whitespace-pre-line text-xs text-gray-600">{action.note}</p>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ol>
+          )}
+
           {/* Link */}
-          {step.link && (
+          {!step.actions?.length && step.link && (
             <a
               href={step.link}
               target="_blank"

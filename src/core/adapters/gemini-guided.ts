@@ -11,7 +11,7 @@ import type {
   MigrationGuidedInstructions,
   MigrationStepFallback,
 } from "@/shared/messaging";
-import { getInstructionsForTarget } from "@/core/platforms";
+import { getInstructionsForTarget, platformLabel } from "@/core/platforms";
 import { hasProjectMemory } from "@/core/transform/project-memory";
 import { renderMemoryImportText } from "@/core/transform/memory-export";
 import { buildDownloads } from "./manual-fallback";
@@ -184,12 +184,17 @@ export function generateGeminiMemoryInstructions(
       id: "memory-open-import",
       title: "Open Gemini's memory import",
       description:
-        'In Gemini, click "Settings & help" at the bottom left, then "Import memory to Gemini". ' +
         "You can skip Gemini's prompt step: PortSmith already has your memories. " +
         "This option needs a personal Google account and isn't offered in the EEA, Switzerland or the UK.",
       copyBlocks: [],
-      link: "https://gemini.google.com/app",
-      actionHint: 'Settings & help → "Import memory to Gemini"',
+      actions: [
+        {
+          label: "Open Gemini's memory import",
+          url: GEMINI_IMPORT_URL,
+          note: 'If the page asks, choose "Import memory to Gemini".',
+        },
+      ],
+      link: GEMINI_IMPORT_URL,
     },
     {
       id: "memory-paste",
@@ -211,17 +216,19 @@ type SourcePlatform = PlatformIdentifier["platform"];
 
 export const GEMINI_IMPORT_URL = "https://gemini.google.com/import";
 
-const CHAT_EXPORT_STEPS: Partial<Record<SourcePlatform, string>> = {
-  chatgpt:
-    "In ChatGPT, open your profile menu, then Settings and Data controls. " +
-    'Under "Export data", click "Export", then "Confirm export". ' +
-    "ChatGPT sends a download link for a .zip file by email or text message when the export is ready, " +
-    "which can take up to 7 days. The link expires 24 hours after you receive it.",
-  claude:
-    "In Claude, click your name at the bottom left, then Settings and Privacy. " +
-    'Next to "Export data", click "Export", choose the date range and click "Export" again. ' +
-    "Claude emails you a download link for a .zip file. The link expires after 24 hours.",
+const CHAT_EXPORT_PAGES: Partial<
+  Record<SourcePlatform, { url: string; note: string }>
+> = {
+  chatgpt: {
+    url: "https://chatgpt.com/#settings/DataControls",
+    note: 'Under "Export data", click "Export", then "Confirm export". ChatGPT emails or texts a download link when the .zip is ready, which can take up to 7 days. The link expires 24 hours after you get it.',
+  },
+  claude: {
+    url: "https://claude.ai/settings/data-privacy-controls",
+    note: 'Next to "Export data", click "Export", choose the date range and click "Export" again. Claude emails a download link for a .zip, and the link expires after 24 hours.',
+  },
 };
+
 
 /**
  * Optional last step: Gemini imports ChatGPT and Claude chat exports itself
@@ -231,23 +238,28 @@ const CHAT_EXPORT_STEPS: Partial<Record<SourcePlatform, string>> = {
 export function buildGeminiChatImportStep(
   sourcePlatform: SourcePlatform | undefined,
 ): MigrationStepFallback | null {
-  const exportSteps = sourcePlatform ? CHAT_EXPORT_STEPS[sourcePlatform] : undefined;
-  if (!exportSteps) return null;
+  const exportPage = sourcePlatform ? CHAT_EXPORT_PAGES[sourcePlatform] : undefined;
+  if (!exportPage) return null;
+  const label = platformLabel(sourcePlatform);
   return {
     id: "memory-chat-history",
     title: "Bring your chat history (optional)",
-    description: [
-      "PortSmith doesn't move your chats, but Gemini can import them from an export.",
-      "",
-      `1. ${exportSteps}`,
-      '2. When the .zip is ready, open Gemini, click "Settings & help" at the bottom left, then "Import memory to Gemini".',
-      '3. Under "Import chats", click "Add" and choose the .zip file. Gemini can take up to a day to process it.',
-      "",
-      "Chat import needs a personal Google account and you must be 18 or older. It isn't available in the EEA, Switzerland or the UK.",
-    ].join("\n"),
+    description: `PortSmith doesn't move your chats, but Gemini can import them from a ${label} export. Each button below opens the page for that part.`,
     copyBlocks: [],
+    actions: [
+      {
+        label: `Open ${label}'s data export`,
+        url: exportPage.url,
+        note: exportPage.note,
+      },
+      {
+        label: "Open Gemini's import page",
+        url: GEMINI_IMPORT_URL,
+        note: 'Under "Import chats", click "Add" and choose the .zip. Gemini can take up to a day to process it.',
+      },
+    ],
     link: GEMINI_IMPORT_URL,
-    actionHint: 'Under "Import chats", click "Add" and choose the .zip',
     optional: true,
   };
 }
+

@@ -124,6 +124,8 @@ export interface MigrationStepFallback {
   fileNames?: string[];
   downloads?: StepDownload[];
   link?: string;
+  /** Buttons that open the exact page each part of the step needs, in order */
+  actions?: Array<{ label: string; url: string; note?: string }>;
   actionHint?: string;
   stepNumber?: number;
   /** Leaving it unticked doesn't count as unfinished work */
