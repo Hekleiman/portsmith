@@ -1,5 +1,5 @@
 import { APP_VERSION } from "@/shared/constants";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // ─── Mocks ──────────────────────────────────────────────────
 // Must be set up before any imports that touch chrome or messaging.
@@ -166,6 +166,19 @@ describe("extractGems", () => {
   // After any successful extraction, cachedSession is set and
   // session-init errors won't fire. These tests verify the
   // batchexecute error path instead (equally important).
+
+  it("succeeds with 0 gems when Gemini returns an empty body", async () => {
+    setupFetch(undefined, {
+      ok: true,
+      text: buildBatchResponseText("CNgdBe", [], "custom"),
+    });
+
+    const result = await extractGems();
+
+    expect(result.success).toBe(true);
+    expect(result.gems).toEqual([]);
+    expect(result.warnings).toEqual([]);
+  });
 
   it("returns failure when batchexecute returns 403", async () => {
     setupFetch(undefined, { ok: false, status: 403 });
@@ -343,6 +356,42 @@ describe("extractGems", () => {
   });
 
   // ── Message handler registration ───────────────────────
+
+  describe("account prefix", () => {
+    afterEach(() => {
+      vi.stubGlobal("location", undefined);
+    });
+
+    function fetchedUrls(): URL[] {
+      return vi.mocked(globalThis.fetch).mock.calls.map((c) => new URL(String(c[0])));
+    }
+
+    it("reads the Gems of the /u/1/ account from a /u/1/ tab", async () => {
+      vi.stubGlobal("location", { pathname: "/u/1/gems/view" });
+      setupFetch(undefined, { ok: true, text: makeGemListResponse([["gem-u1", ["Account 1 Gem", ""], ["Hi"]]]) });
+
+      const result = await extractGems();
+
+      expect(result.gems.map((g) => g.id)).toEqual(["gem-u1"]);
+      const urls = fetchedUrls();
+      expect(urls.map((u) => u.pathname)).toEqual([
+        "/u/1/app",
+        "/u/1/_/BardChatUi/data/batchexecute",
+      ]);
+      expect(urls[1]!.searchParams.get("source-path")).toBe("/u/1/app");
+    });
+
+    it("uses the unprefixed URLs on a default-account tab", async () => {
+      vi.stubGlobal("location", { pathname: "/app" });
+      setupFetch(undefined, { ok: true, text: makeGemListResponse([]) });
+
+      await extractGems();
+
+      const urls = fetchedUrls();
+      expect(urls.map((u) => u.pathname)).toEqual(["/app", "/_/BardChatUi/data/batchexecute"]);
+      expect(urls[1]!.searchParams.get("source-path")).toBe("/app");
+    });
+  });
 
   it("registers GEMINI_EXTRACT_GEMS handler", () => {
     expect(registeredHandlers.has("GEMINI_EXTRACT_GEMS")).toBe(true);

@@ -46,6 +46,7 @@ vi.mock("@/content-scripts/gemini/session", () => {
 });
 
 import { createGem, updateGem, deleteGem } from "@/content-scripts/gemini/importer";
+import { getSession } from "@/content-scripts/gemini/session";
 import type { GemConfig } from "@/core/adapters/gemini-import-types";
 
 // ─── Helpers ────────────────────────────────────────────────
@@ -128,6 +129,27 @@ describe("createGem", () => {
       return url.includes("batchexecute");
     });
     expect(batchCall).toBeDefined();
+  });
+
+  it("creates the Gem in the tab's account", async () => {
+    vi.mocked(getSession).mockResolvedValueOnce({
+      accessToken: "tok-u1",
+      language: "en",
+      prefix: "/u/1",
+    });
+    setupFetch(async (url) => {
+      if (url.includes("batchexecute")) {
+        return { ok: true, text: async () => buildBatchResponseText("oMH3Zd", ["gem-u1"]) };
+      }
+      return { ok: false, status: 404 };
+    });
+
+    const result = await createGem(sampleConfig);
+
+    expect(result.gemId).toBe("gem-u1");
+    const url = new URL(String(vi.mocked(globalThis.fetch).mock.calls[0]![0]));
+    expect(url.pathname).toBe("/u/1/_/BardChatUi/data/batchexecute");
+    expect(url.searchParams.get("source-path")).toBe("/u/1/app");
   });
 
   it("returns fallback on HTTP error", async () => {
