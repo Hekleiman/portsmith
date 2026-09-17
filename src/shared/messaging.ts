@@ -522,7 +522,7 @@ const MESSAGE_TIMEOUT_OVERRIDES: Partial<Record<MessageName, number>> = {
   GEMINI_CREATE_GEM: 60_000,
   GEMINI_UPDATE_GEM: 60_000,
   GEMINI_UPLOAD_KNOWLEDGE_FILE: 180_000,
-  // Up to 10 entries per message, each can take several seconds
+  // Up to 30 entries per message, 6 at a time, each about 4 seconds
   GEMINI_SAVE_MEMORIES: 180_000,
   GEMINI_LIST_MEMORIES: 60_000,
   FETCH_GIZMO_API: 30_000,

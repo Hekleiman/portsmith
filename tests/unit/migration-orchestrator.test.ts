@@ -846,7 +846,7 @@ describe("MigrationOrchestrator: Gemini memories", () => {
     await finishGeminiRun(o);
 
     const calls = h.tabMessages.filter((m) => m.name === "GEMINI_SAVE_MEMORIES");
-    expect(calls.map((c) => (c.payload as { texts: string[] }).texts.length)).toEqual([10, 3]);
+    expect(calls.map((c) => (c.payload as { texts: string[] }).texts.length)).toEqual([13]);
     expect((calls[0]!.payload as { texts: string[] }).texts.slice(0, 2)).toEqual([
       "Be brief.",
       "Fact number 0",
@@ -907,6 +907,19 @@ describe("MigrationOrchestrator: Gemini memories", () => {
       .flatMap((m) => (m.payload as { texts: string[] }).texts);
     expect(texts).toEqual(["Fact number 2"]);
     expect(o.getStatus().memoryAutoSaved).toEqual({ saved: 3, total: 3 });
+  });
+
+  it("saves a fact that appears twice only once", async () => {
+    const [a, b] = memories(2);
+    putManifest("m1", [ws("a")], { memory: [a!, { ...b!, fact: "fact number 0." }] });
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "autofill", ["a"], "gemini");
+    await finishGeminiRun(o);
+    const texts = h.tabMessages
+      .filter((m) => m.name === "GEMINI_SAVE_MEMORIES")
+      .flatMap((m) => (m.payload as { texts: string[] }).texts);
+    expect(texts).toEqual(["Fact number 0"]);
+    expect(o.getStatus().memoryAutoSaved).toEqual({ saved: 2, total: 2 });
   });
 
   it("skips memories Gemini already has", async () => {

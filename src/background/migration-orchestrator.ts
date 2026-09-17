@@ -602,6 +602,16 @@ export class MigrationOrchestrator {
     ].filter((w) => w.text.length > 0);
     if (wanted.length === 0) return;
 
+    // The same fact can appear more than once in the source: save it once.
+    const firstByKey = new Map<string, string>();
+    const sameAs = new Map<string, string>();
+    for (const w of wanted) {
+      const key = savedInfoKey(w.text);
+      const first = firstByKey.get(key);
+      if (first) sameAs.set(w.id, first);
+      else firstByKey.set(key, w.id);
+    }
+
     const done = new Set(this.savedMemoryIds);
     const stepId = "memory-save";
     const progress = (): void => {
@@ -636,9 +646,14 @@ export class MigrationOrchestrator {
       progress();
     }
     // Longer than the editor allows: leave it for the paste step.
-    const todo = wanted.filter((w) => !done.has(w.id) && w.text.length <= SAVED_INFO_MAX_LENGTH);
+    const todo = wanted.filter(
+      (w) => !done.has(w.id) && !sameAs.has(w.id) && w.text.length <= SAVED_INFO_MAX_LENGTH,
+    );
+    const markCopies = (): void => {
+      for (const [id, first] of sameAs) if (done.has(first)) done.add(id);
+    };
 
-    const CHUNK = 10;
+    const CHUNK = 30;
     for (let i = 0; tabId !== null && i < todo.length; i += CHUNK) {
       const chunk = todo.slice(i, i + CHUNK);
       try {
@@ -655,12 +670,14 @@ export class MigrationOrchestrator {
         if (!this.isCurrent(run)) return;
         console.warn(`[PortSmith] Saving memories failed: ${err instanceof Error ? err.message : String(err)}`);
       }
+      markCopies();
       this.savedMemoryIds = [...done];
       progress();
       await this.checkpointState(run);
       if (!this.isCurrent(run)) return;
     }
 
+    markCopies();
     const saved = wanted.filter((w) => done.has(w.id)).length;
     this.memoryAutoSaved = { saved, total: wanted.length };
     this.currentSteps = [

@@ -328,7 +328,7 @@ export async function listMemories(): Promise<
  */
 export async function saveMemories(
   texts: string[],
-  concurrency = 3,
+  concurrency = 6,
 ): Promise<Array<{ text: string; success: boolean; id?: string; error?: string }>> {
   const results: Array<{ text: string; success: boolean; id?: string; error?: string }> =
     texts.map((text) => ({ text, success: false }));
