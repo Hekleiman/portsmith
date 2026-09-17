@@ -38,6 +38,10 @@ import {
   type PlatformId,
 } from "@/core/platforms";
 import {
+  loadSavedMemoryIds,
+  saveSavedMemoryIds,
+} from "@/core/storage/gemini-saved-memory";
+import {
   loadFile,
   loadManifest,
   saveCheckpoint,
@@ -613,6 +617,14 @@ export class MigrationOrchestrator {
       else firstByKey.set(key, w.id);
     }
 
+    // What earlier runs already saved to this account (Gemini's own list
+    // can't be matched by text, since it rewrites the wording).
+    if (this.manifestId) {
+      for (const id of await loadSavedMemoryIds(this.manifestId, this.geminiAccount)) {
+        if (!this.savedMemoryIds.includes(id)) this.savedMemoryIds.push(id);
+      }
+      if (!this.isCurrent(run)) return;
+    }
     const done = new Set(this.savedMemoryIds);
     const stepId = "memory-save";
     const progress = (): void => {
@@ -709,6 +721,9 @@ export class MigrationOrchestrator {
       }
       markCopies();
       this.savedMemoryIds = [...done];
+      if (this.manifestId) {
+        await saveSavedMemoryIds(this.manifestId, this.geminiAccount, this.savedMemoryIds);
+      }
       progress();
       await this.checkpointState(run);
       if (!this.isCurrent(run)) return;
@@ -746,7 +761,11 @@ export class MigrationOrchestrator {
       manifest.source.platform,
       topReasons,
     );
+    if (this.manifestId) {
+      await saveSavedMemoryIds(this.manifestId, this.geminiAccount, [...done]);
+    }
     if (saved === wanted.length) this.memoryImported = true;
+    else await this.openLeftoverPage("https://gemini.google.com", "/saved-info");
   }
 
   /** Suspend until the user answers the pending step. */
@@ -1291,6 +1310,19 @@ export class MigrationOrchestrator {
         withMemory && !memoryAdded,
         failures[0] ?? "Gemini didn't accept them",
       );
+    }
+  }
+
+  /**
+   * Open the page a leftover step needs, so the user lands on it instead of
+   * following written directions.
+   */
+  private async openLeftoverPage(origin: string, path: string): Promise<void> {
+    const account = this.geminiAccount && this.geminiAccount !== "/u/0/" ? this.geminiAccount.slice(0, -1) : "";
+    try {
+      await chrome.tabs.create({ url: `${origin}${account}${path}`, active: true });
+    } catch {
+      // The step still carries the link.
     }
   }
 

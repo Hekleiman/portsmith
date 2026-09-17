@@ -31,6 +31,7 @@ const h = vi.hoisted(() => {
     autofillScript: (_wsId: string): Step[] => [],
     answers: [] as Array<boolean | undefined>,
     files: new Map<string, { blob: string; mimeType: string }>(),
+    savedMemory: [] as string[],
   };
 });
 
@@ -39,6 +40,13 @@ vi.mock("@/shared/messaging", () => ({
   safeSendTabMessage: vi.fn(async (tabId: number, name: string, payload: unknown) => {
     h.tabMessages.push({ tabId, name, payload });
     return h.tabResponder(name, payload);
+  }),
+}));
+
+vi.mock("@/core/storage/gemini-saved-memory", () => ({
+  loadSavedMemoryIds: vi.fn(async () => h.savedMemory),
+  saveSavedMemoryIds: vi.fn(async (_m: string, _a: string | null, ids: string[]) => {
+    h.savedMemory = [...ids];
   }),
 }));
 
@@ -199,6 +207,7 @@ beforeEach(() => {
   h.autofillCalls.length = 0;
   h.answers.length = 0;
   h.files.clear();
+  h.savedMemory = [];
   h.tabResponder = geminiTab();
   h.autofillScript = created;
   vi.clearAllMocks();
@@ -922,6 +931,40 @@ describe("MigrationOrchestrator: Gemini memories", () => {
       .flatMap((m) => (m.payload as { texts: string[] }).texts);
     expect(texts).toEqual(["Fact number 0"]);
     expect(o.getStatus().memoryAutoSaved).toEqual({ saved: 2, total: 2 });
+  });
+
+  it("doesn't send again what an earlier run saved, even after Gemini rewrites it", async () => {
+    putManifest("m1", [ws("a")], { memory: memories(3) });
+    h.savedMemory = ["m0", "m2"];
+    // Gemini's list comes back rewritten, so text matching can't help here.
+    const base = geminiTab();
+    h.tabResponder = (name, payload) =>
+      name === "GEMINI_LIST_MEMORIES"
+        ? { success: true, texts: ["I think fact number 0 is right.", "Fact number 2, restated."] }
+        : base(name, payload);
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "autofill", ["a"], "gemini");
+    await finishGeminiRun(o);
+    const texts = h.tabMessages
+      .filter((m) => m.name === "GEMINI_SAVE_MEMORIES")
+      .flatMap((m) => (m.payload as { texts: string[] }).texts);
+    expect(texts).toEqual(["Fact number 1"]);
+    expect(o.getStatus().memoryAutoSaved).toEqual({ saved: 3, total: 3 });
+    expect(h.savedMemory.sort()).toEqual(["m0", "m1", "m2"]);
+  });
+
+  it("opens Gemini's saved-info page when memories are left over", async () => {
+    putManifest("m1", [ws("a")], { memory: memories(1) });
+    const base = geminiTab();
+    h.tabResponder = (name, payload) =>
+      name === "GEMINI_SAVE_MEMORIES"
+        ? { results: [{ text: "x", success: false, error: "HTTP 400" }] }
+        : base(name, payload);
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "autofill", ["a"], "gemini");
+    await waitFor(() => o.getStatus().phase === "memory", "memory");
+    const created = chromeMock.tabs.create.mock.calls as unknown as Array<[{ url?: string }]>;
+    expect(created.some((c) => c[0]?.url === "https://gemini.google.com/saved-info")).toBe(true);
   });
 
   it("skips memories Gemini already has", async () => {
