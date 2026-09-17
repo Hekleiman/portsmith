@@ -14,10 +14,7 @@ import {
   parseCreateSavedInfoRefusal,
   parseCreateSavedInfoResponse,
   splitSavedInfoText,
-  savedInfoSimilarity,
-  savedInfoTokens,
   SAVED_INFO_API_MAX_LENGTH,
-  SAVED_INFO_SIMILARITY_THRESHOLD,
   parseListSavedInfoResponse,
   savedInfoKey,
 } from "@/content-scripts/gemini/saved-info";
@@ -316,96 +313,5 @@ describe("Gemini saved-info refusals", () => {
 
   it("is null when there is no create frame at all", () => {
     expect(parseCreateSavedInfoRefusal(frames(["e", 4, null, null, 330]))).toBeNull();
-  });
-});
-
-describe("Gemini saved-info similarity (real pairs, Sep 2026)", () => {
-  const matches = (a: string, b: string): boolean =>
-    savedInfoSimilarity(a, b) >= SAVED_INFO_SIMILARITY_THRESHOLD;
-
-  it("drops words under four characters but keeps numbers", () => {
-    expect([...savedInfoTokens("I go by both Henry and Erik.")].sort()).toEqual([
-      "both",
-      "erik",
-      "henry",
-    ]);
-    // Without the numbers these two are the same set.
-    expect([...savedInfoTokens("Fact number 0")].sort()).toEqual(["0", "fact", "number"]);
-    expect(savedInfoSimilarity("Fact number 0", "fact number 1.")).toBeLessThan(
-      SAVED_INFO_SIMILARITY_THRESHOLD,
-    );
-    expect(savedInfoTokens("")).toEqual(new Set());
-  });
-
-  it("is 1 for identical text and symmetric", () => {
-    const a = "I am open to contract-to-hire through staffing firms as a parallel track.";
-    const b = "I am open to contract-to-hire through staffing firms as a parallel track too.";
-    expect(savedInfoSimilarity(a, a)).toBe(1);
-    expect(savedInfoSimilarity(a, b)).toBe(savedInfoSimilarity(b, a));
-  });
-
-  it("scores real rewrites of the same memory above real distinct memories", () => {
-    // Gemini stored the first as the second.
-    const rewrite = savedInfoSimilarity(
-      "Goes by Er, also Henry or Erik",
-      "I go by both Henry and Erik.",
-    );
-    // Two different references, two different memories.
-    const distinct = savedInfoSimilarity(
-      "Stuart Kipper is listed as a professional reference on job applications until September 2026.",
-      "Belinda Donner is listed as a professional reference on job applications until September 2026.",
-    );
-    expect(rewrite).toBeGreaterThan(0.6);
-    expect(distinct).toBeGreaterThan(0.6);
-    // The ranges overlap, which is why the threshold is set for precision.
-    expect(distinct).toBeGreaterThan(rewrite);
-  });
-
-  it("refuses the real false matches that a 0.6 threshold would accept", () => {
-    // Opposite meaning: two different inboxes.
-    expect(matches(
-      "I have a separate real estate business address, hkleimanrealty@gmail.com; real estate mail belongs there.",
-      "My main personal inbox is Gmail at hekleiman@gmail.com.",
-    )).toBe(false);
-    // Contradictory: the host exists, and the host no longer exists.
-    expect(matches(
-      'I use a 2015 MacBook Pro 13" (i5, 8GB) as the HekTV server host.',
-      "hektv-media-server: HekTV no longer exists (Sep 2026) do not assume it is available.",
-    )).toBe(false);
-    // Different references.
-    expect(matches(
-      "Stuart Kipper is listed as a professional reference on job applications until September 2026.",
-      "Belinda Donner is listed as a professional reference on job applications until September 2026.",
-    )).toBe(false);
-    // Different projects.
-    expect(matches(
-      "A primary use case for my Claude Code workflow is trade-up.",
-      "Dartvision is a primary use case for my Claude Code workflow.",
-    )).toBe(false);
-  });
-
-  it("accepts the near-identical rewordings it is meant to catch", () => {
-    expect(matches(
-      "I want a daily morning sweep of Gmail (job responses) and LinkedIn messages. I also want 1-2 LinkedIn feed likes to keep the account warm.",
-      "I want a daily morning sweep of Gmail (job responses) plus LinkedIn messages, and 1-2 LinkedIn feed likes to keep the account warm.",
-    )).toBe(true);
-    expect(matches(
-      "I emailed Chris Reath at Wildflower Health directly about a Junior SWE role (from a Hacker News post).",
-      "I emailed Chris Reath at Wildflower Health directly about a Junior SWE role (from a Hacker News post).",
-    )).toBe(true);
-  });
-
-  it("needs a complete match when there are too few content words", () => {
-    // Two content words: "live" and "vista". Sharing one of them is noise.
-    expect(savedInfoSimilarity("I live in Vista", "I live in Vista.")).toBe(1);
-    expect(savedInfoSimilarity("I live in Vista", "I live in Carlsbad")).toBe(0);
-    expect(savedInfoSimilarity("I live in Vista", "Vista is nice")).toBe(0);
-  });
-
-  it("keeps a partial overlap of three content words below the threshold", () => {
-    // Three words sharing two scores 0.67, which is a real rewrite's score
-    // and also this pair's, so only the threshold keeps them apart.
-    expect(savedInfoSimilarity("I like short answers", "I like short emails")).toBeCloseTo(0.67, 2);
-    expect(matches("I like short answers", "I like short emails")).toBe(false);
   });
 });

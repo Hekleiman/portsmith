@@ -969,6 +969,9 @@ describe("MigrationOrchestrator: Gemini memories", () => {
 
   it("skips memories Gemini already has", async () => {
     putManifest("m1", [ws("a")], { memory: memories(3) });
+    // A store with something in it: the one-time backfill is for accounts
+    // that predate the store, and would otherwise mark all three as saved.
+    h.savedMemory = ["m1"];
     const base = geminiTab();
     h.tabResponder = (name, payload) =>
       name === "GEMINI_LIST_MEMORIES"
@@ -1091,5 +1094,95 @@ describe("MigrationOrchestrator: Gemini accounts", () => {
     );
     await finishGeminiRun(o);
     expect(new Set(h.tabMessages.filter((m) => m.name.startsWith("GEMINI_")).map((m) => m.tabId))).toEqual(new Set([31]));
+  });
+});
+
+describe("MigrationOrchestrator: Gemini saved-memory backfill", () => {
+  /** One memory that fits the create limit, one well over it. */
+  function mixedMemories() {
+    return [
+      { ...memories(1)[0]!, id: "short", fact: "I prefer short answers." },
+      {
+        ...memories(1)[0]!,
+        id: "long",
+        fact: `${"I keep detailed notes about the migration project. ".repeat(40).trim()}`,
+      },
+    ];
+  }
+
+  it("marks everything that fits as saved and sends only the over-limit memory", async () => {
+    putManifest("m1", [ws("a")], { memory: mixedMemories() });
+    const base = geminiTab();
+    h.tabResponder = (name, payload) =>
+      name === "GEMINI_LIST_MEMORIES"
+        ? { success: true, texts: ["Some entry a previous build saved."] }
+        : base(name, payload);
+
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "autofill", ["a"], "gemini");
+    await finishGeminiRun(o);
+
+    const sent = h.tabMessages
+      .filter((m) => m.name === "GEMINI_SAVE_MEMORIES")
+      .flatMap((m) => (m.payload as { texts: string[] }).texts);
+
+    // The short one was never sent; the long one went as split pieces.
+    expect(sent.some((t) => t.includes("I prefer short answers"))).toBe(false);
+    expect(sent.length).toBeGreaterThan(1);
+    expect(sent.every((t) => t.length <= 1500)).toBe(true);
+    expect(sent.join(" ")).toContain("detailed notes about the migration");
+    expect(o.getStatus().memoryAutoSaved).toEqual({ saved: 2, total: 2 });
+  });
+
+  it("persists the backfill before sending anything", async () => {
+    putManifest("m1", [ws("a")], { memory: mixedMemories() });
+    const base = geminiTab();
+    let storeAtFirstSend: string[] | null = null;
+    h.tabResponder = (name, payload) => {
+      if (name === "GEMINI_LIST_MEMORIES") return { success: true, texts: ["An earlier entry."] };
+      if (name === "GEMINI_SAVE_MEMORIES" && storeAtFirstSend === null) {
+        storeAtFirstSend = [...h.savedMemory];
+      }
+      return base(name, payload);
+    };
+
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "autofill", ["a"], "gemini");
+    await finishGeminiRun(o);
+
+    expect(storeAtFirstSend).toContain("short");
+  });
+
+  it("does not backfill when Gemini's list is empty", async () => {
+    putManifest("m1", [ws("a")], { memory: mixedMemories() });
+    const base = geminiTab();
+    h.tabResponder = (name, payload) =>
+      name === "GEMINI_LIST_MEMORIES" ? { success: true, texts: [] } : base(name, payload);
+
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "autofill", ["a"], "gemini");
+    await finishGeminiRun(o);
+
+    const sent = h.tabMessages
+      .filter((m) => m.name === "GEMINI_SAVE_MEMORIES")
+      .flatMap((m) => (m.payload as { texts: string[] }).texts);
+    expect(sent.some((t) => t.includes("I prefer short answers"))).toBe(true);
+  });
+
+  it("does not backfill again once the store has entries", async () => {
+    putManifest("m1", [ws("a")], { memory: mixedMemories() });
+    h.savedMemory = ["short", "long"];
+    const base = geminiTab();
+    h.tabResponder = (name, payload) =>
+      name === "GEMINI_LIST_MEMORIES"
+        ? { success: true, texts: ["An earlier entry."] }
+        : base(name, payload);
+
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "autofill", ["a"], "gemini");
+    await finishGeminiRun(o);
+
+    expect(h.tabMessages.filter((m) => m.name === "GEMINI_SAVE_MEMORIES")).toEqual([]);
+    expect(o.getStatus().memoryAutoSaved).toEqual({ saved: 2, total: 2 });
   });
 });

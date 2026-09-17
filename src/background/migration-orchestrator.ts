@@ -26,10 +26,9 @@ import {
 } from "@/core/transform/project-memory";
 import { textToBase64 } from "@/shared/encoding";
 import {
+  SAVED_INFO_API_MAX_LENGTH,
   SAVED_INFO_MAX_LENGTH,
-  SAVED_INFO_SIMILARITY_THRESHOLD,
   savedInfoKey,
-  savedInfoSimilarity,
   splitSavedInfoText,
 } from "@/content-scripts/gemini/saved-info";
 import {
@@ -661,36 +660,32 @@ export class MigrationOrchestrator {
     }
 
     // Skip what's already in Gemini (a repeated run, or added by hand).
-    const byIdCount = done.size;
-    let matchedExactly = 0;
-    let matchedBySimilarity = 0;
+    let listedEntries = 0;
+    let backfilled = 0;
     let existingKeys: Set<string> | null = null;
     if (tabId !== null) {
       try {
         const existing = await safeSendTabMessage(tabId, "GEMINI_LIST_MEMORIES");
         if (!this.isCurrent(run)) return;
         if (existing.success && existing.texts) {
+          listedEntries = existing.texts.length;
           const keys = new Set(existing.texts.map(savedInfoKey));
           existingKeys = keys;
           // A split memory counts as saved only when every piece is there.
           for (const [id, parts] of partsById) {
             if (parts.every((part) => keys.has(savedInfoKey(part)))) done.add(id);
           }
-          matchedExactly = done.size - byIdCount;
 
-          if (backfilling) {
-            const entries = existing.texts;
-            for (const [id, parts] of partsById) {
-              if (done.has(id)) continue;
-              // Every piece has to find an entry of its own, so a memory that
-              // was too long to save never counts as already there.
-              const matched = parts.every((part) =>
-                entries.some((entry) => savedInfoSimilarity(part, entry) >= SAVED_INFO_SIMILARITY_THRESHOLD),
-              );
-              if (matched) {
-                done.add(id);
-                matchedBySimilarity++;
-              }
+          // One-time migration for an account written to by a build that kept
+          // no record of what it saved. Those builds sent every memory, and
+          // the only deterministic refusal is text over the create limit, so
+          // anything that fits is already in the account. A non-empty list is
+          // required: an empty one means nothing was ever saved.
+          if (backfilling && listedEntries > 0) {
+            for (const w of wanted) {
+              if (done.has(w.id) || w.text.length > SAVED_INFO_API_MAX_LENGTH) continue;
+              done.add(w.id);
+              backfilled++;
             }
           }
         } else {
@@ -717,9 +712,8 @@ export class MigrationOrchestrator {
     const failedIds = new Set<string>();
 
     console.log(
-      `[PortSmith] Gemini memories: ${byIdCount} already recorded, ` +
-        `${matchedExactly} matched by text, ${matchedBySimilarity} matched by similarity` +
-        `${backfilling ? " (first run against this account)" : ""}, ` +
+      `[PortSmith] Gemini memories: ${listedEntries} entries in Gemini's list, ` +
+        `${backfilled} marked as already saved by the one-time backfill, ` +
         `${partsLeft.size} to send as ${todo.length} entr${todo.length === 1 ? "y" : "ies"}.`,
     );
 
