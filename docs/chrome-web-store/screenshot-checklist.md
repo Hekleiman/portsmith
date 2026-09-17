@@ -1,75 +1,95 @@
-# Chrome Web Store: Screenshot Checklist
+# Chrome Web Store: Screenshot Checklist (v0.4.0)
 
-> CWS allows up to 5 screenshots. Recommended dimensions: 1280x800 px (16:10).
-> All screenshots should show the PortSmith side panel alongside the relevant web page.
-> Use a clean Chrome profile with no other extensions visible in the toolbar.
+The Chrome Web Store takes up to 5 screenshots at 1280x800 (16:10). This checklist covers all 7 wizard screens, so there's a spare shot for each slot. The five marked **Upload** are the recommended set.
 
----
-
-## Screenshot 1: Source Selection (Welcome)
-
-**What to show:** The PortSmith side panel open on the left, displaying the "Where are you migrating from?" screen with the ChatGPT platform card selected (green highlight). The main browser tab should show the ChatGPT homepage (logged in, sidebar visible with a few projects/GPTs).
-
-**Dimensions:** 1280x800
-
-**Caption:** Choose your source platform. PortSmith reads your ChatGPT setup directly from the browser.
-
-**Wizard step:** Step 1, Source selection
-
-**Notes:** This screenshot establishes what the extension is and where it lives in the browser. The side panel + ChatGPT tab layout should be immediately clear.
+Setup for every shot:
+- Use a clean Chrome profile with only PortSmith in the toolbar.
+- Open the PortSmith side panel (click the toolbar icon) next to the site it's working with.
+- Use sample content with everyday names (for example "Trip Planner" or "Resume Helper"). Never use real personal content.
+- The example run is ChatGPT to Claude, unless a shot says otherwise.
 
 ---
 
-## Screenshot 2: Extraction in Progress
+## 1. Source (Upload)
 
-**What to show:** The side panel displaying the "Extracting Data" screen with the ProgressTracker visible: some steps completed (green checkmarks), one step active (blue spinner), and remaining steps pending. The detail text should show real counts like "Found 3 projects, 2 GPTs". The ChatGPT tab should be visible in the background.
+- **Screen:** "Where are you migrating from?" with the ChatGPT card selected.
+- **Behind it:** chatgpt.com, signed in, with a few projects in the sidebar.
+- **Caption:** Pick the assistant you use today. PortSmith reads your setup right in the browser.
 
-**Dimensions:** 1280x800
+## 2. Target
 
-**Caption:** PortSmith scans your ChatGPT sidebar, projects, Custom GPTs, memory, and instructions automatically.
+- **Screen:** "Where are you migrating to?" with Claude selected. ChatGPT is not listed, because PortSmith hides the source to block same-platform moves.
+- **Behind it:** chatgpt.com.
+- **Caption:** Choose where your setup should go: Claude, Gemini or ChatGPT.
 
-**Wizard step:** Step 4, Extraction
+## 3. Reading
 
-**Notes:** This shows the extension actively working. Ideally capture with 3+ projects and 2+ GPTs in the detail text to demonstrate real-world usage.
+- **Screen:** "Reading your ChatGPT data" with the progress list: some steps done, one running, the rest waiting. The detail line shows real counts (for example 3 projects and 2 GPTs).
+- **Behind it:** chatgpt.com.
+- **Caption:** PortSmith finds your projects, GPTs, files, memories and custom instructions.
+- **Also possible:** "Reading your Claude Projects" when Claude is the source.
+
+## 4. Review (Upload)
+
+- **Screen:** "Review Extracted Data" with several workspace cards. At least one card shows both badges:
+  - "Instructions adjusted for Claude"
+  - "Project memory: N notes"
+- **Also show:** the summary counts at the top and one card's instruction preview.
+- **Caption:** Check everything first. Choose what moves, edit instructions and review project memory.
+- **Tip:** open one workspace for a spare shot of the instruction comparison and the "Project memory" editor.
+
+## 5. Mode (Upload)
+
+- **Screen:** "How should we import?" with three cards:
+  - Autofill ("Fastest")
+  - Guided ("Most Reliable")
+  - Hybrid ("Recommended"), shown selected
+- **Behind it:** claude.ai/projects.
+- **Caption:** Automatic, step by step, or automatic with a check before each item.
+
+## 6. Migrate (Upload)
+
+- **Screen:** "Hybrid to Claude" in progress:
+  - one workspace done;
+  - one running, with its steps listed (create project, instructions, files, project memory, check);
+  - the Pause control visible.
+- **Behind it:** claude.ai showing the new project.
+- **Caption:** PortSmith creates each project, adds instructions, files and project memory, then checks the result.
+- **Spare shot:** the "Bring over your memory" step, which walks through Claude's memory import.
+
+## 7. Results (Upload)
+
+- **Screen:** "Migration finished" with the summary: projects created and checked, files and project memory delivered, and any follow-up items listed plainly.
+- **Behind it:** claude.ai/projects with the same project names.
+- **Caption:** An honest summary: what was created, what was checked, and what still needs you.
+- **Note:** keep the follow-up list short but visible. It shows that PortSmith doesn't claim work it didn't do.
 
 ---
 
-## Screenshot 3: Review & Edit
+## Before uploading
 
-**What to show:** The side panel displaying the "Review Extracted Data" screen with several WorkspaceCards visible, each showing a project/GPT name, instruction preview, knowledge file count, and a toggle checkbox. The summary stats bar at the top should show counts like "Found 5 workspaces, 3 memory items, 2 files". At least one card should be expanded enough to show the instruction text preview.
+- [ ] Every shot is 1280x800 and shows the current 0.4.0 UI (no popup, the side panel only).
+- [ ] No real names, email addresses, avatars, chat titles or memory content are visible (check both the side panel and the site behind it).
+- [ ] Captions contain no em dashes.
+- [ ] The order in the dashboard is 1, 4, 5, 6, 7.
 
-**Dimensions:** 1280x800
+## Privacy policy hosting
 
-**Caption:** Review everything before migrating: edit names, toggle items, and see compatibility notes.
+- **Listing URL:** https://hekleiman.github.io/portsmith/privacy-policy.html
+- **Source:** GitHub Pages, from `main:/docs`.
+- **Current status (checked 2026-09-17):** the live page still shows "Effective date: March 1, 2026". The 0.4.0 version ("Effective date: September 16, 2026 (version 0.4.0)") is on `release/v0.4.0` and goes live only after PR #1 is merged into `main`.
+- [ ] After the merge, reload the URL and confirm it shows "version 0.4.0" before submitting.
 
-**Wizard step:** Step 5, Review
+## Fields to paste into the dashboard
 
-**Notes:** This is the "trust" screenshot. Users need to see that they have full control over what gets migrated. Show a mix of projects and GPTs with realistic names.
-
----
-
-## Screenshot 4: Migration Mode Selection
-
-**What to show:** The side panel displaying "How should we import?" with the three mode cards visible: Autofill (Fastest), Guided (Most Reliable), and Hybrid (Recommended). The Hybrid card should be selected (highlighted border). The browser tab behind should show `claude.ai/projects`.
-
-**Dimensions:** 1280x800
-
-**Caption:** Choose your migration style: fully automatic, step-by-step guided, or hybrid with confirmation at each step.
-
-**Wizard step:** Step 6, Mode selection
-
-**Notes:** This screenshot demonstrates that the user stays in control. The three clear options with pros/cons badges make the extension feel trustworthy and well-designed.
-
----
-
-## Screenshot 5: Migration Complete
-
-**What to show:** The side panel displaying the completion summary: the MigrationSummary component showing a list of migrated workspaces with green success checkmarks, a "Migration Complete" heading, and the summary stats. The browser tab should show the Claude projects page with the newly created projects visible in Claude's project list, confirming they were actually created.
-
-**Dimensions:** 1280x800
-
-**Caption:** Done. Your ChatGPT projects are now Claude projects. PortSmith verifies each one was created successfully.
-
-**Wizard step:** Step 8, Complete
-
-**Notes:** End on a success state. The side-by-side of PortSmith's success screen + Claude's project list showing the same project names is the strongest proof the extension works. Use realistic project names that a non-technical user would relate to (e.g., "Trip Planner", "Resume Helper", not "test-gpt-1").
+| Dashboard field | Source |
+|-----------------|--------|
+| Short description | `store-listing.md`, "Short Description" (must match `description` in `manifest.json`) |
+| Detailed description | `store-listing.md`, "Full Description" |
+| What's new / release notes | `store-listing.md`, "What's New in v0.4.0" |
+| Single purpose | Not written yet. Suggested: "Move a user's AI assistant setup (projects, GPTs, Gems, instructions, files and memory) between ChatGPT, Claude and Gemini." |
+| Permission justifications (`storage`, `sidePanel`, `scripting`) | `permission-justifications.md` |
+| Host permission justification (chatgpt.com, claude.ai, gemini.google.com) | `permission-justifications.md` |
+| Data usage disclosures | `privacy-policy.html` (no data collected or sent to PortSmith; everything stays in the browser) |
+| Privacy policy URL | https://hekleiman.github.io/portsmith/privacy-policy.html |
+| Package | `portsmith-v0.4.0.zip` (built from `dist/`, not committed) |
