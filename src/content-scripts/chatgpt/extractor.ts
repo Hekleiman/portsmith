@@ -25,6 +25,7 @@ import type {
 import type {
   ExtractedCustomGPT,
   ExtractedChatGPTProject,
+  ExtractedFileMetadata,
   ExtractedMemoryItem,
   ExtractionWarning,
   CustomGPTExtractionResult,
@@ -305,8 +306,6 @@ export async function extractCustomGPTs(): Promise<CustomGPTExtractionResult> {
 async function extractInstructionsFromModal(
   warnings: ExtractionWarning[],
 ): Promise<string> {
-  console.log("[PortSmith] DIAG-3: extractInstructionsFromModal() called");
-
   // Helper: click an element via the service worker's MAIN world execution.
   // Content script events are untrusted (isolated world), so Radix UI ignores
   // them. MAIN world .click() is treated as a real user event.
@@ -333,7 +332,6 @@ async function extractInstructionsFromModal(
     if (document.querySelector(sel)) {
       threeDotFound = await clickInMainWorld(sel);
       if (threeDotFound) {
-        console.log(`[PortSmith] DIAG-4a: three-dot menu opened via: ${sel}`);
         break;
       }
     }
@@ -350,7 +348,6 @@ async function extractInstructionsFromModal(
         threeDotFound = await clickInMainWorld('button[data-portsmith-threedot="true"]');
         btn.removeAttribute("data-portsmith-threedot");
         if (threeDotFound) {
-          console.log("[PortSmith] DIAG-4a: three-dot menu opened via text-match fallback");
           break;
         }
       }
@@ -369,14 +366,12 @@ async function extractInstructionsFromModal(
         threeDotFound = await clickInMainWorld('button[data-portsmith-threedot="true"]');
         btn.removeAttribute("data-portsmith-threedot");
         if (threeDotFound) {
-          console.log("[PortSmith] DIAG-4a: three-dot menu opened via SVG icon fallback");
           break;
         }
       }
     }
   }
 
-  console.log("[PortSmith] DIAG-4a: three-dot menu button found:", threeDotFound);
   if (!threeDotFound) {
     warn(warnings, "Project instructions", "Three-dot menu button not found — skipping instructions");
     return "";
@@ -408,7 +403,6 @@ async function extractInstructionsFromModal(
     }
   }
 
-  console.log('[PortSmith] DIAG-4b: dropdown "Project settings" item clicked:', settingsClicked);
   if (!settingsClicked) {
     // Close the dropdown before returning
     await clickInMainWorld('[role="menu"]').catch(() => {});
@@ -443,7 +437,6 @@ async function extractInstructionsFromModal(
     } else {
       instructions = el.textContent?.trim() ?? "";
     }
-    console.log("[PortSmith] DIAG-5: instructions textarea value length:", instructions.length);
     console.log(`[PortSmith] Project instructions: found ${instructions.length} chars`);
   } else {
     console.log("[PortSmith] Project instructions: textarea not found in modal");
@@ -472,6 +465,173 @@ async function extractInstructionsFromModal(
   return instructions;
 }
 
+// ─── File Blob Download ─────────────────────────────────────
+
+interface FileDownloadResult {
+  contentRef?: string;
+  fileName?: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  error?: string;
+}
+
+/**
+ * Download a single file blob directly from ChatGPT's backend API.
+ * Runs in the content script (same-origin), so the service worker
+ * can't die mid-request.
+ */
+async function downloadFileBlob(
+  fileId: string,
+  gizmoId: string,
+): Promise<{
+  success: boolean;
+  blob?: string;
+  fileName?: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  error?: string;
+}> {
+  try {
+    // Step 1: Get access token from ChatGPT session
+    const sessionResp = await fetch("/api/auth/session");
+    if (!sessionResp.ok) return { success: false, error: "Failed to get session" };
+    const session = (await sessionResp.json()) as Record<string, unknown>;
+    const token = session.accessToken as string | undefined;
+    if (!token) return { success: false, error: "No access token" };
+
+    const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
+
+    // Step 2: Get signed download URL
+    console.log("[PortSmith] Fetching download URL for:", fileId);
+    const dlResp = await fetch(
+      `/backend-api/files/download/${fileId}?gizmo_id=${gizmoId}`,
+      { headers },
+    );
+    if (!dlResp.ok) return { success: false, error: `HTTP ${dlResp.status}` };
+    const dlData = (await dlResp.json()) as { download_url?: string };
+    if (!dlData.download_url) return { success: false, error: "No download URL" };
+
+    // Step 3: Get file metadata
+    let meta: { file_name?: string; mime_type?: string } = {};
+    try {
+      const metaResp = await fetch(
+        `/backend-api/files/${fileId}/simple?gizmo_id=${gizmoId}`,
+        { headers },
+      );
+      if (metaResp.ok) meta = (await metaResp.json()) as typeof meta;
+    } catch {
+      // Non-fatal: metadata is nice-to-have
+    }
+
+    // Step 4: Download the actual file blob
+    console.log("[PortSmith] Downloading blob for:", meta.file_name ?? fileId);
+    const blobResp = await fetch(dlData.download_url);
+    if (!blobResp.ok) return { success: false, error: `Blob HTTP ${blobResp.status}` };
+
+    const arrayBuffer = await blobResp.arrayBuffer();
+    const bytes = new Uint8Array(arrayBuffer);
+
+    if (bytes.length > 7_500_000) {
+      return { success: false, error: `Too large (${(bytes.length / 1024 / 1024).toFixed(1)}MB)` };
+    }
+
+    // Base64 encode in chunks to avoid call stack overflow
+    let binary = "";
+    const chunkSize = 8192;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      binary += String.fromCharCode(...bytes.subarray(i, Math.min(i + chunkSize, bytes.length)));
+    }
+
+    console.log("[PortSmith] File downloaded:", meta.file_name ?? fileId, `(${(bytes.length / 1024).toFixed(1)}KB)`);
+
+    return {
+      success: true,
+      blob: btoa(binary),
+      fileName: meta.file_name ?? undefined,
+      mimeType: meta.mime_type ?? blobResp.headers.get("content-type") ?? "application/octet-stream",
+      sizeBytes: bytes.length,
+    };
+  } catch (e: unknown) {
+    console.error("[PortSmith] Download error for", fileId, e);
+    return { success: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/**
+ * Download file blobs from ChatGPT for a project's knowledge files.
+ * Downloads happen in parallel via direct fetch (same-origin content script).
+ * Blobs are sent to the service worker for IndexedDB storage.
+ * Failures are non-blocking — files without blobs fall back to manual upload.
+ */
+async function downloadFileBlobs(
+  files: Array<{ id?: string; name: string; type: string; size: number }>,
+  gizmoId: string,
+  projectName: string,
+): Promise<Array<FileDownloadResult | null>> {
+  const downloadable = files.filter((f) => f.id);
+  if (downloadable.length === 0) return files.map(() => null);
+
+  console.log(
+    `[PortSmith] Downloading ${downloadable.length} file(s) for "${projectName}"`,
+  );
+  sendMessage("EXTRACT_PROGRESS", {
+    step: `Downloading ${downloadable.length} file(s) for "${projectName}"`,
+    percent: 50,
+  }).catch(() => {});
+
+  const promises = files.map(async (f): Promise<FileDownloadResult | null> => {
+    if (!f.id) return null;
+
+    try {
+      console.log(`[PortSmith] Downloading: ${f.name} (${f.id})`);
+      const result = await downloadFileBlob(f.id, gizmoId);
+
+      if (result.success && result.blob) {
+        // Store in extension's IndexedDB via service worker
+        const storeResult = await sendMessage("STORE_DOWNLOADED_FILE", {
+          fileId: f.id,
+          blob: result.blob,
+          mimeType: result.mimeType ?? f.type,
+          fileName: result.fileName ?? f.name,
+        });
+
+        const contentRef = storeResult?.contentRef ?? null;
+        if (contentRef) {
+          console.log(`[PortSmith] Downloaded: ${f.name} → ${contentRef}`);
+          return {
+            contentRef,
+            fileName: result.fileName ?? f.name,
+            mimeType: result.mimeType ?? f.type,
+            sizeBytes: result.sizeBytes,
+          };
+        } else {
+          console.log(`[PortSmith] Store failed: ${f.name} — ${storeResult?.error}`);
+          return { error: storeResult?.error ?? "Failed to store file" };
+        }
+      } else {
+        console.log(`[PortSmith] Download failed: ${f.name} — ${result.error}`);
+        return { error: result.error };
+      }
+    } catch (e) {
+      console.log(`[PortSmith] Download error: ${f.name}`, e);
+      return { error: e instanceof Error ? e.message : String(e) };
+    }
+  });
+
+  const results = await Promise.allSettled(promises);
+  const resolved = results.map((r) =>
+    r.status === "fulfilled" ? r.value : null,
+  );
+
+  const succeeded = resolved.filter((r) => r?.contentRef).length;
+  const failed = downloadable.length - succeeded;
+  console.log(
+    `[PortSmith] File downloads complete: ${succeeded} succeeded, ${failed} failed`,
+  );
+
+  return resolved;
+}
+
 /**
  * Extract a single ChatGPT Project via the backend API (preferred)
  * with DOM fallback if the API fails.
@@ -487,26 +647,35 @@ async function extractSingleProject(
   gizmoId?: string,
   sidebarName?: string,
 ): Promise<ExtractedChatGPTProject | null> {
-  console.log("[PortSmith] DIAG-2: extractSingleProject() called", { gizmoId, sidebarName });
-
   // ── API-first path ────────────────────────────────────────
   if (gizmoId) {
-    console.log(`[PortSmith] DIAG-API-1: Fetching gizmo API for: ${gizmoId}`);
     try {
       const apiResult: GizmoAPIResponse = await sendMessage("FETCH_GIZMO_API", { gizmoId });
 
       if (apiResult.error) {
-        console.log(`[PortSmith] DIAG-API-3: API failed: ${apiResult.error}, falling back to DOM extraction`);
         warn(warnings, `Project "${sidebarName ?? gizmoId}"`, `API error: ${apiResult.error} — falling back to DOM`);
       } else {
         const gizmo = apiResult.gizmo;
         const instructions = gizmo?.instructions ?? "";
         const name = gizmo?.display?.name ?? sidebarName ?? "Unknown Project";
         const description = gizmo?.display?.description ?? "";
-        const knowledgeFileNames = (apiResult.files ?? []).map((f) => f.name);
+        const apiFiles = apiResult.files ?? [];
+        const knowledgeFileNames = apiFiles.map((f) => f.name);
 
-        console.log(
-          `[PortSmith] DIAG-API-2: API response: instructions length ${instructions.length}, files count ${knowledgeFileNames.length}`,
+        // Download file blobs in parallel (non-blocking — failures fall back to manual)
+        const downloadResults = await downloadFileBlobs(apiFiles, gizmoId, name);
+
+        const knowledgeFileMetadata: ExtractedFileMetadata[] = apiFiles.map(
+          (f, i) => {
+            const dl = downloadResults[i];
+            return {
+              name: f.name,
+              type: f.type,
+              size: f.size,
+              id: f.id,
+              contentRef: dl?.contentRef,
+            };
+          },
         );
 
         return {
@@ -515,12 +684,12 @@ async function extractSingleProject(
           description,
           instructions,
           knowledgeFileNames,
+          knowledgeFileMetadata,
           conversationCount: 0,
         };
       }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      console.log(`[PortSmith] DIAG-API-3: API failed: ${errMsg}, falling back to DOM extraction`);
       warn(warnings, `Project "${sidebarName ?? gizmoId}"`, `API call failed: ${errMsg} — falling back to DOM`);
     }
   }
@@ -596,7 +765,6 @@ export async function extractProjects(): Promise<ProjectExtractionResult> {
     if (!gizmoId) continue;
 
     const name = link.textContent?.trim() ?? "Unknown Project";
-    console.log(`[PortSmith] DIAG-PROJ: calling extractSingleProject for "${name}" (${gizmoId})`);
     const project = await extractSingleProject(warnings, gizmoId, name);
     if (project) projects.push(project);
   }
@@ -867,13 +1035,16 @@ function init(): void {
     return inspectDOM();
   });
 
+  onMessage("PING", () => {
+    return { pong: true as const };
+  });
+
   onMessage("SCAN_SIDEBAR", () => {
     return scanSidebar();
   });
 
   onMessage("EXTRACT_PROJECT_PAGE", async () => {
-    console.log("[PortSmith] DIAG-1: EXTRACT_PROJECT_PAGE handler received");
-    return extractProjectPage();
+      return extractProjectPage();
   });
 
   // Notify service worker of current page state

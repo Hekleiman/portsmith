@@ -3,7 +3,7 @@ export interface MethodCardProps {
   description: string;
   icon: React.ReactNode;
   selected: boolean;
-  recommended?: boolean;
+  badge?: string;
   onClick: () => void;
 }
 
@@ -12,7 +12,7 @@ export default function MethodCard({
   description,
   icon,
   selected,
-  recommended,
+  badge,
   onClick,
 }: MethodCardProps): React.JSX.Element {
   return (
@@ -29,9 +29,9 @@ export default function MethodCard({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="text-sm font-semibold text-gray-900">{title}</span>
-          {recommended && (
+          {badge && (
             <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-semibold text-blue-700">
-              Recommended
+              {badge}
             </span>
           )}
         </div>

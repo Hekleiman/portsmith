@@ -11,6 +11,10 @@ import {
   clearMigrationHistory,
   createInitialState,
 } from "@/core/storage/migration-state";
+import {
+  getPreference,
+  setPreference,
+} from "@/core/storage/preferences";
 
 // ─── Phase / Step mapping ────────────────────────────────────
 
@@ -160,6 +164,12 @@ export const useMigrationStore = create<MigrationStore>((set, get) => ({
       return;
     }
     if (phase === "target_selection") {
+      // Claude and Gemini only support browser extraction (API) — skip method selection
+      const source = get().sourcePlatform;
+      if (source === "claude" || source === "gemini") {
+        set({ phase: "extracting", extractionMethod: "browser" });
+        return;
+      }
       set({ phase: "extraction_method" });
       return;
     }
@@ -189,6 +199,12 @@ export const useMigrationStore = create<MigrationStore>((set, get) => ({
       return;
     }
     if (phase === "extracting") {
+      // Claude and Gemini skipped extraction_method — go back to target_selection
+      const source = get().sourcePlatform;
+      if (source === "claude" || source === "gemini") {
+        set({ phase: "target_selection" });
+        return;
+      }
       set({ phase: "extraction_method" });
       return;
     }
@@ -211,10 +227,12 @@ export const useMigrationStore = create<MigrationStore>((set, get) => ({
 
   setSourcePlatform: (platform) => {
     set({ sourcePlatform: platform });
+    void setPreference("lastSourcePlatform", platform);
   },
 
   setTargetPlatform: (platform) => {
     set({ targetPlatform: platform });
+    void setPreference("lastTargetPlatform", platform);
   },
 
   setExtractionMethod: (method) => {
@@ -258,7 +276,21 @@ export const useMigrationStore = create<MigrationStore>((set, get) => ({
 
   checkForResume: async () => {
     const data = await resume();
-    set({ pendingResume: data, resumeChecked: true });
+    if (data) {
+      set({ pendingResume: data, resumeChecked: true });
+    } else {
+      // No checkpoint — load saved platform preferences for repeat migrations
+      const [savedSource, savedTarget] = await Promise.all([
+        getPreference("lastSourcePlatform"),
+        getPreference("lastTargetPlatform"),
+      ]);
+      set({
+        pendingResume: null,
+        resumeChecked: true,
+        sourcePlatform: savedSource ?? null,
+        targetPlatform: savedTarget ?? null,
+      });
+    }
   },
 
   acceptResume: () => {

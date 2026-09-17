@@ -7,6 +7,7 @@ import {
   type AutofillStepStatus,
   type InstructionsDelivery,
 } from "@/shared/messaging";
+import { loadFile } from "@/core/storage/indexed-db";
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -18,6 +19,8 @@ export interface AutofillStepResult {
   fallback?: ImportStep;
   /** Set on instructions-related steps to track delivery method */
   instructionsDelivery?: InstructionsDelivery;
+  /** Set on verify steps to indicate API verification passed */
+  verified?: boolean;
 }
 
 // ─── Helpers ────────────────────────────────────────────────
@@ -135,7 +138,13 @@ interface AutofillStepDef {
     | "navigate"
     | "manual"
     | "wait_for_navigation"
-    | "fill_instructions";
+    | "fill_instructions"
+    | "dismiss_popover"
+    | "api_create_project"
+    | "api_set_instructions"
+    | "api_verify_project"
+    | "api_upload_files"
+    | "navigate_to_project";
   target?: string; // SELECTOR_MAP key
   value?: string;
   guidedIndex: number; // index into the guided steps for fallback
@@ -143,96 +152,100 @@ interface AutofillStepDef {
 }
 
 /**
- * Phase 1: Navigate to projects page, click Create, fill name + description,
- * click "Create project", then wait for navigation to project dashboard.
+ * Build API-based step definitions for creating a Claude project.
+ * Instead of clicking DOM buttons, this uses Claude's internal API.
  */
-function buildPhase1Defs(workspace: Workspace): AutofillStepDef[] {
-  // Use workspace name as fallback if description is empty
+function buildApiStepDefs(workspace: Workspace): AutofillStepDef[] {
   const description =
     workspace.description.trim().length > 0
       ? workspace.description
       : workspace.name;
+  const translatedInstructions =
+    workspace.instructions.translated?.claude ?? workspace.instructions.raw;
 
-  return [
+  const defs: AutofillStepDef[] = [
     {
       id: `${workspace.id}-navigate`,
-      title: "Opening Claude Projects",
+      title: "Opening Claude",
       action: "navigate",
       guidedIndex: 0,
       phase: 1,
     },
     {
-      id: `${workspace.id}-create`,
-      title: "Clicking Create Project",
-      action: "click",
-      target: "projects.createButton",
-      guidedIndex: 1,
-      phase: 1,
-    },
-    {
-      id: `${workspace.id}-name`,
-      title: "Filling project name",
-      action: "clear_and_fill",
-      target: "form.nameInput",
-      value: workspace.name,
-      guidedIndex: 2,
-      phase: 1,
-    },
-    {
-      id: `${workspace.id}-description`,
-      title: "Filling description",
-      action: "clear_and_fill",
-      target: "form.descriptionInput",
-      value: description,
-      guidedIndex: 3,
-      phase: 1,
-    },
-    {
-      id: `${workspace.id}-save`,
+      id: `${workspace.id}-create-api`,
       title: "Creating project",
-      action: "click",
-      target: "form.saveButton",
-      guidedIndex: 4,
-      phase: 1,
-    },
-    {
-      id: `${workspace.id}-wait-nav`,
-      title: "Waiting for project page to load",
-      action: "wait_for_navigation",
-      guidedIndex: -1, // no guided equivalent
+      action: "api_create_project",
+      value: JSON.stringify({ name: workspace.name, description }),
+      guidedIndex: -1,
       phase: 1,
     },
   ];
-}
 
-/**
- * Phase 2: On the project dashboard, enter instructions and upload files.
- * Guided step indices continue from Phase 1 (which ends at index 4).
- */
-function buildPhase2Defs(workspace: Workspace): AutofillStepDef[] {
-  const instructions =
-    workspace.instructions.translated?.claude ?? workspace.instructions.raw;
-  const defs: AutofillStepDef[] = [];
-
-  let guidedIdx = 5; // continues from Phase 1
-
-  if (instructions.trim().length > 0) {
+  if (translatedInstructions.trim()) {
     defs.push({
-      id: `${workspace.id}-instructions`,
-      title: "Entering project instructions",
-      action: "fill_instructions",
-      value: instructions,
-      guidedIndex: guidedIdx++,
+      id: `${workspace.id}-instructions-api`,
+      title: "Setting project instructions",
+      action: "api_set_instructions",
+      value: translatedInstructions,
+      guidedIndex: -1,
       phase: 2,
     });
   }
 
-  // Knowledge files — always manual (DOM file upload is fragile)
-  const compatibleFiles = workspace.knowledgeFiles.filter((f) => f.compatible);
-  if (compatibleFiles.length > 0) {
+  // Knowledge files — upload via API when blobs are available, manual for the rest
+  // Upload BEFORE verify so verification can check the file count.
+  const filesWithBlobs = workspace.knowledgeFiles.filter(
+    (f) => f.compatible && f.contentRef,
+  );
+  const filesWithoutBlobs = workspace.knowledgeFiles.filter(
+    (f) => f.compatible && !f.contentRef,
+  );
+  const incompatibleCount = workspace.knowledgeFiles.filter(
+    (f) => !f.compatible,
+  ).length;
+
+  if (filesWithBlobs.length > 0) {
+    defs.push({
+      id: `${workspace.id}-upload-files`,
+      title: `Uploading ${filesWithBlobs.length} file(s)`,
+      action: "api_upload_files",
+      value: JSON.stringify(
+        filesWithBlobs.map((f) => ({
+          contentRef: f.contentRef,
+          fileName: f.originalName,
+          mimeType: f.mimeType,
+        })),
+      ),
+      guidedIndex: -1,
+      phase: 2,
+    });
+  }
+
+  // Verify the project was created correctly (after all API operations)
+  defs.push({
+    id: `${workspace.id}-verify`,
+    title: "Verifying project",
+    action: "api_verify_project",
+    guidedIndex: -1,
+    phase: 2,
+  });
+
+  // Navigate to the new project page so the user can see it
+  defs.push({
+    id: `${workspace.id}-open-project`,
+    title: "Opening your new project",
+    action: "navigate_to_project",
+    guidedIndex: -1,
+    phase: 2,
+  });
+
+  // Manual step for files without blobs or incompatible files
+  if (filesWithoutBlobs.length > 0 || incompatibleCount > 0) {
+    const guidedIdx = translatedInstructions.trim() ? 8 : 5;
+    const manualCount = filesWithoutBlobs.length + incompatibleCount;
     defs.push({
       id: `${workspace.id}-files`,
-      title: "Upload knowledge files (manual step)",
+      title: `Upload remaining files (${manualCount} need attention)`,
       action: "manual",
       guidedIndex: guidedIdx,
       phase: 2,
@@ -242,16 +255,22 @@ function buildPhase2Defs(workspace: Workspace): AutofillStepDef[] {
   return defs;
 }
 
+// ─── Legacy DOM-based step builders (kept as fallback) ──────
+// These are no longer used in the primary flow. The API-based
+// approach above replaces them. Preserved in case API calls
+// become unavailable and we need to revert to DOM automation.
+
+// function buildPhase1Defs(workspace: Workspace): AutofillStepDef[] { ... }
+// function buildPhase2Defs(workspace: Workspace): AutofillStepDef[] { ... }
+
 // ─── AsyncGenerator ─────────────────────────────────────────
 
 /**
  * Autofill a single workspace as a Claude Project.
  *
- * Phase 1: Create the project (name + description on creation modal).
- * Phase 2: Enter instructions on the project dashboard (after SPA navigation).
- *
- * If instructions can't be autofilled, they are copied to clipboard
- * and the step yields a "clipboard" status.
+ * Uses Claude's internal API to create the project and set instructions.
+ * Falls back to guided mode if API calls fail. Falls back to clipboard
+ * if instructions API fails.
  */
 export async function* autofillWorkspace(
   workspace: Workspace,
@@ -261,9 +280,7 @@ export async function* autofillWorkspace(
   const guidedInstructions = generateInstructions(workspace);
   const guidedSteps = guidedInstructions.steps;
 
-  const phase1Defs = buildPhase1Defs(workspace);
-  const phase2Defs = buildPhase2Defs(workspace);
-  const allDefs = [...phase1Defs, ...phase2Defs];
+  const allDefs = buildApiStepDefs(workspace);
 
   const instructions =
     workspace.instructions.translated?.claude ?? workspace.instructions.raw;
@@ -271,9 +288,18 @@ export async function* autofillWorkspace(
   let instructionsDelivered = false;
   let clipboardCopied = false;
 
+  // UUID of the project created via API, used for subsequent steps
+  let createdProjectUuid: string | null = null;
+
   for (const def of allDefs) {
-    // ── Hybrid confirmation ──────────────────────────────
-    if (options.hybrid && def.action !== "wait_for_navigation") {
+    // ── Hybrid confirmation (skip internal steps) ────────
+    const skipHybrid =
+      def.action === "api_create_project" ||
+      def.action === "api_set_instructions" ||
+      def.action === "api_verify_project" ||
+      def.action === "api_upload_files" ||
+      def.action === "navigate_to_project";
+    if (options.hybrid && !skipHybrid) {
       const pending: AutofillStepResult = {
         id: def.id,
         title: def.title,
@@ -304,12 +330,10 @@ export async function* autofillWorkspace(
           const tab = await chrome.tabs.get(tabId);
           console.log("[PortSmith] Navigate step: current tab URL =", tab?.url, "attempt =", attempt + 1);
 
-          const alreadyOnProjects = tab.url?.startsWith(
-            "https://claude.ai/projects",
-          );
+          const alreadyOnClaude = /claude\.ai\//.test(tab.url ?? "");
 
-          if (!alreadyOnProjects) {
-            console.log("[PortSmith] Navigate step: navigating to claude.ai/projects");
+          if (!alreadyOnClaude) {
+            console.log("[PortSmith] Navigate step: navigating to claude.ai");
             const loaded = await navigateAndWaitForLoad(
               tabId,
               "https://claude.ai/projects",
@@ -319,7 +343,7 @@ export async function* autofillWorkspace(
             if (!loaded) {
               const retry: boolean | undefined = yield {
                 id: def.id,
-                title: "Could not navigate to Claude. Please open claude.ai/projects in your browser tab.",
+                title: "Could not navigate to Claude. Please open claude.ai in your browser tab.",
                 status: "navigate_failed",
               };
               if (retry === false) {
@@ -329,17 +353,15 @@ export async function* autofillWorkspace(
               console.log("[PortSmith] Navigate step: user retrying");
               continue;
             }
-            // Give content script time to inject after page load
             await delay(1000);
           }
 
-          // Verify content script is ready before proceeding
+          // Verify content script is ready (needed for clipboard fallback)
           console.log("[PortSmith] Navigate step: pinging content script");
           const ready = await waitForContentScript(tabId);
           console.log("[PortSmith] Navigate step: content script ready =", ready);
 
           if (ready) {
-            // Bring the tab to the foreground so the user can see it
             try {
               await chrome.tabs.update(tabId, { active: true });
               const focusTab = await chrome.tabs.get(tabId);
@@ -353,7 +375,6 @@ export async function* autofillWorkspace(
             break;
           }
 
-          // Content script not responding — prompt user
           const retry: boolean | undefined = yield {
             id: def.id,
             title: "Claude page loaded but extension not responding. Please refresh claude.ai and click Retry.",
@@ -367,7 +388,7 @@ export async function* autofillWorkspace(
           console.warn("[PortSmith] Navigate step: error", err);
           const retry: boolean | undefined = yield {
             id: def.id,
-            title: "Navigation error. Please open claude.ai/projects manually and click Retry.",
+            title: "Navigation error. Please open claude.ai manually and click Retry.",
             status: "navigate_failed",
           };
           if (retry === false) return;
@@ -390,105 +411,259 @@ export async function* autofillWorkspace(
       continue;
     }
 
-    // ── Wait for navigation step ─────────────────────────
-    if (def.action === "wait_for_navigation") {
-      let navSuccess = false;
+    // ── API: Create project ──────────────────────────────
+    if (def.action === "api_create_project") {
       try {
-        const result = await sendTabMessage(tabId, "WAIT_FOR_NAVIGATION", {
-          urlPattern: "^https://claude\\.ai/project/[a-f0-9-]+",
-          timeoutMs: 15000,
+        const { name, description } = JSON.parse(def.value ?? "{}") as {
+          name: string;
+          description: string;
+        };
+        console.log("[PortSmith] Calling CLAUDE_CREATE_PROJECT via content script, tabId:", tabId);
+        const result = await safeSendTabMessage(tabId, "CLAUDE_CREATE_PROJECT", {
+          name,
+          description,
         });
-        navSuccess = result.success;
-      } catch {
-        // Navigation detection failed
-      }
+        console.log("[PortSmith] CLAUDE_CREATE_PROJECT result:", JSON.stringify(result));
 
-      if (navSuccess) {
-        yield { id: def.id, title: def.title, status: "success" };
-        // Extra settle time for React hydration
-        await delay(2000);
-      } else {
-        // Timeout or failure — fall through to clipboard mode for instructions
-        if (hasInstructions && !instructionsDelivered && !clipboardCopied) {
-          const copied = await clipboardWrite(tabId, instructions);
-          if (copied) {
-            clipboardCopied = true;
-            yield {
-              id: def.id,
-              title: "Navigation took too long — instructions copied to clipboard",
-              status: "clipboard",
-              instructionsDelivery: "clipboard",
-            };
-            await delay(3000);
-            continue;
-          }
-        }
-        yield { id: def.id, title: def.title, status: "fallback" };
-        await delay(3000);
-      }
-      continue;
-    }
-
-    // ── Manual step ──────────────────────────────────────
-    if (def.action === "manual") {
-      yield {
-        id: def.id,
-        title: def.title,
-        status: "fallback",
-        fallback: guidedSteps[def.guidedIndex],
-      };
-      continue;
-    }
-
-    // ── Compound instructions action ─────────────────────
-    if (def.action === "fill_instructions") {
-      let success = false;
-      try {
-        const result = await sendTabMessage(tabId, "FILL_PROJECT_INSTRUCTIONS", {
-          instructions: def.value!,
-        });
-        success = result.success;
-      } catch {
-        // Message failed
-      }
-
-      if (success) {
-        instructionsDelivered = true;
-        yield { id: def.id, title: def.title, status: "success" };
-        await delay(500);
-        continue;
-      }
-
-      // Clipboard fallback
-      if (hasInstructions && !clipboardCopied) {
-        const copied = await clipboardWrite(tabId, instructions);
-        if (copied) {
-          clipboardCopied = true;
+        if (result.success && result.uuid) {
+          createdProjectUuid = result.uuid;
+          console.log("[PortSmith] API create succeeded, uuid =", result.uuid);
+          yield { id: def.id, title: def.title, status: "success" };
+        } else {
+          console.log("[PortSmith] API create failed:", result.error);
           yield {
             id: def.id,
             title: def.title,
-            status: "clipboard",
-            instructionsDelivery: "clipboard",
-            fallback: guidedSteps[def.guidedIndex],
+            status: "fallback",
+            fallback: guidedSteps[1], // "Start a new project" step
           };
-          continue;
         }
+      } catch (e) {
+        console.log("[PortSmith] API create error:", e);
+        yield {
+          id: def.id,
+          title: def.title,
+          status: "fallback",
+          fallback: guidedSteps[1],
+        };
       }
-
-      yield {
-        id: def.id,
-        title: def.title,
-        status: "fallback",
-        fallback: guidedSteps[def.guidedIndex],
-      };
-      await delay(500);
       continue;
     }
 
-    // ── DOM action (click or fill) ───────────────────────
+    // ── API: Set instructions ────────────────────────────
+    if (def.action === "api_set_instructions") {
+      if (!createdProjectUuid) {
+        // Project wasn't created via API — fall back to clipboard
+        if (def.value) {
+          const clipOk = await clipboardWrite(tabId, def.value);
+          clipboardCopied = clipOk;
+          yield {
+            id: def.id,
+            title: def.title,
+            status: clipOk ? "clipboard" : "fallback",
+            instructionsDelivery: clipOk ? "clipboard" : "none",
+          };
+        } else {
+          yield { id: def.id, title: def.title, status: "skipped" };
+        }
+        continue;
+      }
+
+      try {
+        console.log("[PortSmith] Calling CLAUDE_SET_INSTRUCTIONS via content script, tabId:", tabId);
+        const result = await safeSendTabMessage(tabId, "CLAUDE_SET_INSTRUCTIONS", {
+          projectUuid: createdProjectUuid,
+          instructions: def.value ?? "",
+        });
+        console.log("[PortSmith] CLAUDE_SET_INSTRUCTIONS result:", JSON.stringify(result));
+
+        if (result.success) {
+          instructionsDelivered = true;
+          console.log("[PortSmith] API set instructions succeeded");
+          yield {
+            id: def.id,
+            title: def.title,
+            status: "success",
+            instructionsDelivery: "autofilled",
+          };
+        } else {
+          console.log("[PortSmith] API set instructions failed:", result.error);
+          const clipOk = def.value
+            ? await clipboardWrite(tabId, def.value)
+            : false;
+          clipboardCopied = clipOk;
+          yield {
+            id: def.id,
+            title: def.title,
+            status: clipOk ? "clipboard" : "fallback",
+            instructionsDelivery: clipOk ? "clipboard" : "none",
+          };
+        }
+      } catch (e) {
+        console.log("[PortSmith] API set instructions error:", e);
+        const clipOk = def.value
+          ? await clipboardWrite(tabId, def.value)
+          : false;
+        clipboardCopied = clipOk;
+        yield {
+          id: def.id,
+          title: def.title,
+          status: clipOk ? "clipboard" : "fallback",
+          instructionsDelivery: clipOk ? "clipboard" : "none",
+        };
+      }
+      continue;
+    }
+
+    // ── API: Upload files ─────────────────────────────────
+    if (def.action === "api_upload_files") {
+      if (!createdProjectUuid) {
+        yield { id: def.id, title: def.title, status: "skipped" };
+        continue;
+      }
+
+      try {
+        const files = JSON.parse(def.value ?? "[]") as Array<{
+          contentRef: string;
+          fileName: string;
+          mimeType: string;
+        }>;
+        let uploaded = 0;
+        let failed = 0;
+
+        for (const file of files) {
+          try {
+            const fileRecord = await loadFile(file.contentRef);
+            if (!fileRecord?.blob) {
+              console.log("[PortSmith] No blob found for:", file.contentRef);
+              failed++;
+              continue;
+            }
+
+            const result = await safeSendTabMessage(tabId, "CLAUDE_UPLOAD_FILE", {
+              projectUuid: createdProjectUuid,
+              fileName: file.fileName,
+              fileBlob: fileRecord.blob,
+              mimeType: file.mimeType,
+            });
+
+            if (result.success) {
+              uploaded++;
+              console.log("[PortSmith] Uploaded:", file.fileName);
+            } else {
+              failed++;
+              console.log("[PortSmith] Upload failed:", file.fileName, result.error);
+            }
+          } catch (e) {
+            failed++;
+            console.log("[PortSmith] Upload error:", file.fileName, e);
+          }
+        }
+
+        if (failed === 0) {
+          yield { id: def.id, title: `Uploaded ${uploaded} file(s)`, status: "success" };
+        } else if (uploaded > 0) {
+          yield {
+            id: def.id,
+            title: `Uploaded ${uploaded}/${files.length} (${failed} failed)`,
+            status: "fallback",
+          };
+        } else {
+          yield { id: def.id, title: "File upload failed", status: "fallback" };
+        }
+      } catch (e) {
+        console.log("[PortSmith] api_upload_files error:", e);
+        yield { id: def.id, title: def.title, status: "fallback" };
+      }
+      continue;
+    }
+
+    // ── API: Verify project ─────────────────────────────
+    if (def.action === "api_verify_project") {
+      if (!createdProjectUuid) {
+        yield { id: def.id, title: def.title, status: "skipped" };
+        continue;
+      }
+
+      try {
+        const result = await safeSendTabMessage(tabId, "CLAUDE_VERIFY_PROJECT", {
+          projectUuid: createdProjectUuid,
+        });
+
+        if (result.success) {
+          const issues: string[] = [];
+          if (result.name !== workspace.name) {
+            issues.push(`Name mismatch: expected "${workspace.name}", got "${result.name}"`);
+          }
+
+          const expectedInstructions =
+            workspace.instructions.translated?.claude ?? workspace.instructions.raw;
+          if (expectedInstructions.trim() && !result.hasInstructions) {
+            issues.push("Instructions not found on project");
+          }
+
+          if (issues.length > 0) {
+            console.log("[PortSmith] Verification issues:", issues);
+            yield {
+              id: def.id,
+              title: `Verified with ${issues.length} issue(s)`,
+              status: "fallback",
+              verified: false,
+            };
+          } else {
+            console.log("[PortSmith] Verification passed: name matches, instructions present");
+            yield { id: def.id, title: "Project verified", status: "success", verified: true };
+          }
+        } else {
+          console.log("[PortSmith] Verification API failed:", result.error);
+          yield { id: def.id, title: def.title, status: "skipped" };
+        }
+      } catch (e) {
+        console.log("[PortSmith] Verification error:", e);
+        yield { id: def.id, title: def.title, status: "skipped" };
+      }
+      continue;
+    }
+
+    // ── Navigate to new project page ─────────────────────
+    if (def.action === "navigate_to_project") {
+      if (createdProjectUuid) {
+        try {
+          await navigateAndWaitForLoad(
+            tabId,
+            `https://claude.ai/project/${createdProjectUuid}`,
+          );
+          await delay(1000);
+        } catch {
+          // Non-fatal — user can navigate manually
+        }
+      }
+      yield { id: def.id, title: def.title, status: "success" };
+      continue;
+    }
+
+    // ── Manual step — always pause for user confirmation ──
+    if (def.action === "manual") {
+      const pending: AutofillStepResult = {
+        id: def.id,
+        title: def.title,
+        status: "pending",
+        fallback: guidedSteps[def.guidedIndex],
+      };
+      const confirmed: boolean | undefined = yield pending;
+
+      if (confirmed === false) {
+        yield { id: def.id, title: def.title, status: "skipped" };
+      } else {
+        yield { id: def.id, title: def.title, status: "success" };
+      }
+      continue;
+    }
+
+    // ── DOM action (click or fill) — legacy fallback ─────
     const success = await executeOnTab(
       tabId,
-      def.action,
+      def.action as "click" | "fill" | "clear_and_fill",
       def.target!,
       def.value,
     );

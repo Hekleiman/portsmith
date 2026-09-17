@@ -2,11 +2,11 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import {
   sendMessage,
   type OrchestratorStatus,
-  type AutofillStepStatus,
 } from "@/shared/messaging";
 import { useMigrationStore } from "../store/migration-store";
 import StepCard from "../components/StepCard";
 import CopyBlock from "../components/CopyBlock";
+import StepRow from "../components/StepRow";
 
 // ─── Status Hook ─────────────────────────────────────────────
 
@@ -34,52 +34,6 @@ function useOrchestratorStatus(pollMs = 500): OrchestratorStatus | null {
   }, [pollMs]);
 
   return status;
-}
-
-// ─── Step Row ───────────────────────────────────────────────
-
-interface StepRowProps {
-  title: string;
-  status: AutofillStepStatus;
-}
-
-function StepRow({ title, status }: StepRowProps): React.JSX.Element {
-  const icon: Record<AutofillStepStatus, string> = {
-    pending: "\u25CB",
-    running: "\u25CF",
-    success: "\u2713",
-    failed: "\u2717",
-    fallback: "\u26A0",
-    skipped: "\u2014",
-    clipboard: "\u2398",
-    navigate_failed: "\u2717",
-  };
-
-  const color: Record<AutofillStepStatus, string> = {
-    pending: "text-gray-400",
-    running: "text-blue-500 animate-pulse",
-    success: "text-green-600",
-    failed: "text-red-500",
-    fallback: "text-amber-500",
-    skipped: "text-gray-300",
-    clipboard: "text-blue-500",
-    navigate_failed: "text-red-500 animate-pulse",
-  };
-
-  return (
-    <div className="flex items-center gap-2 py-1">
-      <span className={`w-4 text-center text-sm ${color[status]}`}>
-        {icon[status]}
-      </span>
-      <span
-        className={`text-xs ${
-          status === "skipped" ? "text-gray-300 line-through" : "text-gray-700"
-        }`}
-      >
-        {title}
-      </span>
-    </div>
-  );
 }
 
 // ─── Overall Progress ──────────────────────────────────────
@@ -123,7 +77,11 @@ export default function Migrate(): React.JSX.Element {
     (s) => s.selectedWorkspaceIds,
   );
   const deliveryMode = useMigrationStore((s) => s.deliveryMode);
+  const targetPlatform = useMigrationStore((s) => s.targetPlatform);
   const goToStep = useMigrationStore((s) => s.goToStep);
+
+  const targetName =
+    targetPlatform === "gemini" ? "Gemini" : "Claude";
 
   const status = useOrchestratorStatus();
   const startedRef = useRef(false);
@@ -169,6 +127,7 @@ export default function Migrate(): React.JSX.Element {
         manifestId: manifestId!,
         mode: deliveryMode!,
         workspaceIds: selectedWorkspaceIds,
+        targetPlatform: targetPlatform ?? undefined,
       });
     }
 
@@ -292,7 +251,7 @@ export default function Migrate(): React.JSX.Element {
           <p className="mt-1 text-sm text-gray-500">
             {status.completedWorkspaceIds.length} workspace
             {status.completedWorkspaceIds.length !== 1 ? "s" : ""} migrated to
-            Claude.
+            {targetName}.
           </p>
           {hasClipboardItems && (
             <div className="mt-2">
@@ -374,6 +333,7 @@ export default function Migrate(): React.JSX.Element {
           <StepCard
             step={currentStep}
             stepNumber={memoryStepIdx + 1}
+            totalSteps={status.memorySteps.length}
             done={memoryCompletedIds.has(currentStep.id)}
             onToggleDone={() => toggleMemoryStep(currentStep.id)}
           />
@@ -432,11 +392,18 @@ export default function Migrate(): React.JSX.Element {
       ? Math.round((totalDone / status.totalWorkspaces) * 100)
       : 0;
 
+  const duplicateTabBanner = status.duplicateTabWarning ? (
+    <div className="rounded-lg border border-yellow-200 bg-yellow-50 px-3 py-2 text-sm text-yellow-800">
+      {"\u26A0\uFE0F"} {status.duplicateTabWarning}
+    </div>
+  ) : null;
+
   // ─── Paused ──────────────────────────────────────────────
 
   if (status.phase === "paused") {
     return (
       <div className="flex flex-col gap-3">
+        {duplicateTabBanner}
         <OverallProgress status={status} overallPct={overallPct} />
 
         <div className="flex flex-col items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4">
@@ -473,27 +440,28 @@ export default function Migrate(): React.JSX.Element {
   if (status.mode === "guided" && status.guidedInstructions) {
     const steps = status.guidedInstructions.steps;
     const currentStep = steps[guidedStepIdx];
+    const guidedTotalSteps =
+      status.guidedInstructions.totalSteps || steps.length;
     const allDone =
       steps.length > 0 &&
       steps.every((s) => guidedCompletedIds.has(s.id));
 
     return (
       <div className="flex flex-col gap-3">
+        {duplicateTabBanner}
         <OverallProgress status={status} overallPct={overallPct} />
 
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-medium text-gray-500">
-            {status.guidedInstructions.workspaceName}
-          </span>
-          <span className="text-[11px] text-gray-400">
-            Step {guidedStepIdx + 1} of {steps.length}
-          </span>
+        <div className="mb-1">
+          <div className="text-xs font-medium uppercase tracking-wide text-slate-400">
+            Migrating: {status.guidedInstructions.workspaceName}
+          </div>
         </div>
 
         {currentStep && (
           <StepCard
             step={currentStep}
-            stepNumber={guidedStepIdx + 1}
+            stepNumber={currentStep.stepNumber ?? guidedStepIdx + 1}
+            totalSteps={guidedTotalSteps}
             done={guidedCompletedIds.has(currentStep.id)}
             onToggleDone={() => toggleGuidedStep(currentStep.id)}
           />
@@ -569,6 +537,7 @@ export default function Migrate(): React.JSX.Element {
 
   return (
     <div className="flex flex-col gap-3">
+      {duplicateTabBanner}
       <OverallProgress status={status} overallPct={overallPct} />
 
       {/* Workspace header */}
@@ -747,35 +716,77 @@ export default function Migrate(): React.JSX.Element {
           </div>
         )}
 
-      {/* Hybrid confirmation buttons */}
+      {/* Confirmation prompt (hybrid steps + manual file steps) */}
       {status.pendingConfirmStepId &&
-        !status.currentSteps.find(
-          (s) =>
-            s.id === status.pendingConfirmStepId &&
-            s.status === "navigate_failed",
-        ) && (
-          <div className="flex items-center justify-between rounded-lg border border-blue-200 bg-blue-50 px-3 py-2">
-            <span className="text-xs font-medium text-blue-700">
-              Ready to execute this step?
-            </span>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => handleConfirm(false)}
-                className="rounded px-3 py-1 text-xs font-medium text-gray-600 hover:bg-gray-100"
-              >
-                Skip
-              </button>
-              <button
-                type="button"
-                onClick={() => handleConfirm(true)}
-                className="rounded bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700"
-              >
-                Execute
-              </button>
+        (() => {
+          const pendingStep = status.currentSteps.find(
+            (s) => s.id === status.pendingConfirmStepId,
+          );
+          if (!pendingStep || pendingStep.status === "navigate_failed")
+            return null;
+
+          const hasFiles =
+            pendingStep.fallback?.fileNames &&
+            pendingStep.fallback.fileNames.length > 0;
+
+          if (hasFiles) {
+            // File upload step — show full instructions
+            return (
+              <div className="space-y-3 rounded-lg border border-blue-200 bg-blue-50 p-3">
+                {pendingStep.fallback && (
+                  <StepCard
+                    step={pendingStep.fallback}
+                    stepNumber={pendingStep.fallback.stepNumber ?? 0}
+                    totalSteps={0}
+                    done={false}
+                    onToggleDone={() => {}}
+                  />
+                )}
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleConfirm(true)}
+                    className="flex-1 rounded-lg bg-blue-600 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                  >
+                    I've uploaded the files
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleConfirm(false)}
+                    className="flex-1 rounded-lg bg-slate-100 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200"
+                  >
+                    Skip — I'll do this later
+                  </button>
+                </div>
+              </div>
+            );
+          }
+
+          // Generic hybrid confirmation
+          return (
+            <div className="flex items-center justify-between rounded-lg border border-blue-200 bg-blue-50 px-3 py-2">
+              <span className="text-xs font-medium text-blue-700">
+                Ready to execute this step?
+              </span>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleConfirm(false)}
+                  className="rounded px-3 py-1 text-xs font-medium text-gray-600 hover:bg-gray-100"
+                >
+                  Skip
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleConfirm(true)}
+                  className="rounded bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700"
+                >
+                  Execute
+                </button>
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
       {/* Failed workspace warnings */}
       {status.failedWorkspaces.length > 0 && (

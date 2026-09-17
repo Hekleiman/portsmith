@@ -25,8 +25,13 @@ const UNSUPPORTED_ON_CLAUDE = new Set([
 function classifyWorkspace(
   ws: Workspace,
   failed: boolean,
+  apiVerified: boolean,
 ): WorkspaceStatus {
   if (failed) return "failed";
+
+  // If API verification confirmed the project exists with correct data,
+  // treat as fully migrated — warnings still show in follow-up items
+  if (apiVerified) return "success";
 
   const hasUnsupported = ws.capabilities.some(
     (c) => UNSUPPORTED_ON_CLAUDE.has(c.type) && c.required,
@@ -234,6 +239,9 @@ export default function Complete(): React.JSX.Element {
     orchestratorStatus?.completedWorkspaceIds ?? [],
   );
   const verifiedNames = new Set(verificationResult?.found ?? []);
+  const apiVerifiedIds = new Set(
+    orchestratorStatus?.verifiedWorkspaceIds ?? [],
+  );
 
   const selectedWorkspaces = manifest.workspaces.filter((ws) =>
     selectedWorkspaceIds.includes(ws.id),
@@ -242,7 +250,10 @@ export default function Complete(): React.JSX.Element {
   const workspaceSummaries: WorkspaceSummary[] = selectedWorkspaces.map(
     (ws) => {
       const failed = failedMap.has(ws.id);
-      const status = classifyWorkspace(ws, failed);
+      const apiVerified = apiVerifiedIds.has(ws.id);
+      const status = classifyWorkspace(ws, failed, apiVerified);
+      // Use API verification if available, fall back to DOM-based verification
+      const verified = apiVerified || (verificationResult ? verifiedNames.has(ws.name) : undefined);
       return {
         id: ws.id,
         name: ws.name,
@@ -250,7 +261,7 @@ export default function Complete(): React.JSX.Element {
         error: failedMap.get(ws.id),
         fileCount: ws.knowledgeFiles.filter((f) => f.compatible).length,
         warnings: ws.migration.warnings,
-        verified: verificationResult ? verifiedNames.has(ws.name) : undefined,
+        verified: verified === false ? undefined : verified,
       };
     },
   );

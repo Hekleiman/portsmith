@@ -14,12 +14,15 @@ export interface ImportStep {
   copyBlocks: CopyBlockData[];
   fileNames?: string[];
   link?: string;
+  actionHint?: string;
+  stepNumber?: number;
 }
 
 export interface ImportInstructions {
   workspaceId: string;
   workspaceName: string;
   steps: ImportStep[];
+  totalSteps: number;
 }
 
 // ─── Instruction Generation ─────────────────────────────────
@@ -28,11 +31,11 @@ export interface ImportInstructions {
  * Build guided-mode steps for importing a single workspace as a Claude Project.
  *
  * Claude uses a two-phase creation flow:
- *   Phase 1 (creation modal): Name + Description + "Create project"
+ *   Phase 1 (creation page): Name + Description + "Create project"
  *   Phase 2 (project dashboard): Instructions + Files + Verify
  */
 export function generateInstructions(workspace: Workspace): ImportInstructions {
-  const instructions =
+  const translatedInstructions =
     workspace.instructions.translated?.claude ?? workspace.instructions.raw;
 
   // Use workspace name as fallback if description is empty
@@ -41,97 +44,157 @@ export function generateInstructions(workspace: Workspace): ImportInstructions {
       ? workspace.description
       : workspace.name;
 
-  const steps: ImportStep[] = [
-    // ── Phase 1: Creation modal ─────────────────────────
-    {
-      id: `${workspace.id}-navigate`,
-      title: "Go to Claude Projects",
-      description: "Open the Claude Projects page in your browser.",
-      copyBlocks: [],
-      link: "https://claude.ai/projects",
-    },
-    {
-      id: `${workspace.id}-create`,
-      title: "Create a new project",
-      description:
-        'On the Projects page, click the "Create a project" button (or the + icon) to open the creation modal.',
-      copyBlocks: [],
-    },
-    {
-      id: `${workspace.id}-name`,
-      title: "Enter the project name",
-      description:
-        "On the project creation screen, paste the project name into the Name field.",
-      copyBlocks: [{ label: "Project name", content: workspace.name }],
-    },
-    {
-      id: `${workspace.id}-description`,
-      title: "Enter the description",
-      description:
-        "On the project creation screen, paste the description into the Description field.",
-      copyBlocks: [{ label: "Description", content: description }],
-    },
-    {
-      id: `${workspace.id}-save`,
-      title: 'Click "Create project"',
-      description:
-        'Click the "Create project" button. After creation, you\'ll be taken to the project dashboard — this is a different page where you\'ll add instructions.',
-      copyBlocks: [],
-    },
-  ];
+  const steps: ImportStep[] = [];
+  let stepNum = 1;
+
+  // ── Phase 1: Project creation page ─────────────────────────
+
+  steps.push({
+    id: `${workspace.id}-navigate`,
+    title: "Open Claude Projects",
+    description:
+      "Open the link below. You should see your list of projects (or an empty page if you have none yet).",
+    copyBlocks: [],
+    link: "https://claude.ai/projects",
+    actionHint: "Click the link to open Claude",
+    stepNumber: stepNum++,
+  });
+
+  steps.push({
+    id: `${workspace.id}-create`,
+    title: "Start a new project",
+    description:
+      'Click the "New project" button at the top of the page. This will take you to a new page where you can set up your project.',
+    copyBlocks: [],
+    actionHint: 'Click "New project"',
+    stepNumber: stepNum++,
+  });
+
+  steps.push({
+    id: `${workspace.id}-name`,
+    title: "Paste the project name",
+    description:
+      'You should see a form with a "Name" field. Click the Name field, then paste the project name below.',
+    copyBlocks: [{ label: "Project name", content: workspace.name }],
+    actionHint: "Click the Name field, then paste",
+    stepNumber: stepNum++,
+  });
+
+  steps.push({
+    id: `${workspace.id}-description`,
+    title: "Paste the description",
+    description:
+      'In the same form, find the "Description" field below the name. Click it and paste the description.',
+    copyBlocks: [{ label: "Description", content: description }],
+    actionHint: "Click the Description field, then paste",
+    stepNumber: stepNum++,
+  });
+
+  steps.push({
+    id: `${workspace.id}-save`,
+    title: 'Click "Create project"',
+    description:
+      'Click the "Create project" button at the bottom of the form. You\'ll be redirected to your new project\'s page \u2014 this may take a few seconds.',
+    copyBlocks: [],
+    actionHint: 'Click "Create project" and wait for redirect',
+    stepNumber: stepNum++,
+  });
 
   // ── Phase 2: Project dashboard ──────────────────────
-  if (instructions.length > 0) {
-    steps.push(
-      {
-        id: `${workspace.id}-open-instructions`,
-        title: "Open the instructions editor",
-        description:
-          'After the project is created, you\'ll be on the project dashboard. Scroll down to the "Instructions" section and click "Set project instructions" or the "+" button to open the editor.',
-        copyBlocks: [],
-      },
-      {
-        id: `${workspace.id}-instructions`,
-        title: "Paste the project instructions",
-        description: `On the project dashboard, paste these instructions into the instructions editor (${instructions.length.toLocaleString()} chars). Note: instructions go on this second page, not the creation modal.`,
-        copyBlocks: [
-          { label: "Project instructions", content: instructions },
-        ],
-      },
-      {
-        id: `${workspace.id}-save-instructions`,
-        title: "Save the instructions",
-        description:
-          'Click "Save" to save the project instructions on the dashboard.',
-        copyBlocks: [],
-      },
-    );
+
+  if (translatedInstructions.trim()) {
+    steps.push({
+      id: `${workspace.id}-open-instructions`,
+      title: "Open the instructions editor",
+      description:
+        'On your new project\'s page, find the "Instructions" section. Click the "+" button or "Add content" next to it to open the instructions editor.',
+      copyBlocks: [],
+      actionHint: 'Find "Instructions" and click "+" to add',
+      stepNumber: stepNum++,
+    });
+
+    steps.push({
+      id: `${workspace.id}-instructions`,
+      title: "Paste the project instructions",
+      description: `A text editor will appear. Click inside it and paste the instructions below. (${translatedInstructions.length.toLocaleString()} characters)`,
+      copyBlocks: [
+        { label: "Project instructions", content: translatedInstructions },
+      ],
+      actionHint: "Click the text area, then paste",
+      stepNumber: stepNum++,
+    });
+
+    steps.push({
+      id: `${workspace.id}-save-instructions`,
+      title: "Save the instructions",
+      description:
+        'Click the "Save" button to save your project instructions.',
+      copyBlocks: [],
+      actionHint: 'Click "Save"',
+      stepNumber: stepNum++,
+    });
   }
 
-  // Knowledge files step — only if there are files to upload
+  // Knowledge files step — show if workspace has any files
   const compatibleFiles = workspace.knowledgeFiles.filter((f) => f.compatible);
-  if (compatibleFiles.length > 0) {
+  const needsConversion = workspace.knowledgeFiles.filter(
+    (f) => !f.compatible && f.conversionNeeded,
+  );
+  const unsupported = workspace.knowledgeFiles.filter(
+    (f) => !f.compatible && !f.conversionNeeded,
+  );
+
+  if (workspace.knowledgeFiles.length > 0) {
+    let filesDescription =
+      'Your project has been created! Now add your files.\n\n';
+
+    if (compatibleFiles.length > 0) {
+      filesDescription +=
+        'On your project page, look for a "Knowledge" section or an "Add content" button. Click it and upload the files listed below.\n\nIf you haven\'t downloaded these from ChatGPT yet, open your ChatGPT project in another tab and download each file first.';
+    }
+
+    if (needsConversion.length > 0) {
+      filesDescription += `\n\nThese files need to be converted first:`;
+      for (const f of needsConversion) {
+        filesDescription += `\n\u2022 ${f.originalName} \u2014 ${f.conversionNeeded}`;
+      }
+    }
+
+    if (unsupported.length > 0) {
+      filesDescription += `\n\n${unsupported.length} file(s) can't be transferred (not supported by Claude):`;
+      for (const f of unsupported) {
+        filesDescription += `\n\u2022 ${f.originalName}`;
+      }
+    }
+
     steps.push({
       id: `${workspace.id}-files`,
-      title: "Upload knowledge files",
-      description:
-        'On the project dashboard, upload the following files to the project knowledge base. You can drag and drop them or use the "Add content" button.',
+      title: `Upload project files (${compatibleFiles.length} of ${workspace.knowledgeFiles.length} ready)`,
+      description: filesDescription,
       copyBlocks: [],
       fileNames: compatibleFiles.map((f) => f.originalName),
+      actionHint: compatibleFiles.length > 0
+        ? 'Upload your files, then click "Done" below'
+        : 'Convert files first, then upload and click "Done"',
+      stepNumber: stepNum++,
     });
   }
 
   steps.push({
     id: `${workspace.id}-verify`,
-    title: "Verify the project",
-    description: `Open the "${workspace.name}" project and send a test message to confirm everything is set up correctly.`,
+    title: "Verify your project",
+    description:
+      "Start a new chat inside this project and send a test message to confirm the instructions are working as expected.",
     copyBlocks: [],
+    actionHint: "Send a test message in the project",
+    stepNumber: stepNum++,
   });
 
   return {
     workspaceId: workspace.id,
     workspaceName: workspace.name,
     steps,
+    totalSteps: stepNum - 1,
   };
 }
 

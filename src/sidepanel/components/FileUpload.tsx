@@ -25,7 +25,7 @@ export default function FileUpload({
       setError(null);
 
       if (!file.name.endsWith(".zip")) {
-        setError("Please select a .zip file");
+        setError("That file doesn't look right. Please upload the .zip file from the OpenAI email (not a screenshot or other file).");
         return;
       }
 
@@ -105,10 +105,9 @@ export default function FileUpload({
           />
         </svg>
         <p className="mt-3 text-sm font-medium text-gray-700">
-          Drop your ChatGPT export here
+          Drop your backup file here
         </p>
-        <p className="mt-1 text-xs text-gray-500">or click to browse</p>
-        <p className="mt-2 text-xs text-gray-400">.zip files only</p>
+        <p className="mt-1 text-xs text-gray-500">or click to find it on your computer</p>
       </div>
 
       <input

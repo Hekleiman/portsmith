@@ -15,6 +15,7 @@ import type {
 import type {
   ExtractedCustomGPT,
   ExtractedChatGPTProject,
+  ExtractedFileMetadata,
   ExtractedCustomInstructions,
   ExtractedMemoryItem,
 } from "@/core/adapters/chatgpt-dom-types";
@@ -24,6 +25,11 @@ import {
   generateCapabilityWarnings,
 } from "./prompt-translator";
 import { mapMemoryItems } from "./memory-mapper";
+import {
+  isClaudeCompatible,
+  getConversionSuggestion,
+  getMimeType,
+} from "./file-compatibility";
 
 // ─── DOM Data Input Type ─────────────────────────────────────
 
@@ -283,58 +289,27 @@ function mapCapabilities(instructions: string): WorkspaceCapability[] {
 
 // ─── Knowledge File Mapping ─────────────────────────────────
 
-function mapKnowledgeFileNames(fileNames: string[]): KnowledgeFile[] {
+function mapKnowledgeFiles(
+  fileNames: string[],
+  metadata?: ExtractedFileMetadata[],
+): KnowledgeFile[] {
   return fileNames.map((name, i) => {
-    const ext = name.split(".").pop()?.toLowerCase() ?? "";
-    const mimeType = MIME_MAP[ext] ?? "application/octet-stream";
-    const compatible = COMPATIBLE_EXTENSIONS.has(ext);
+    const meta = metadata?.[i];
+    const compatible = isClaudeCompatible(name);
+    const hasBlob = !!meta?.contentRef;
 
     return {
       id: `kf-${String(i + 1).padStart(3, "0")}`,
       originalName: name,
-      mimeType,
-      sizeBytes: 0, // Unknown from DOM extraction
-      source: "referenced" as const,
+      mimeType: meta?.type ?? getMimeType(name),
+      sizeBytes: meta?.size ?? 0,
+      source: hasBlob ? ("exported" as const) : ("referenced" as const),
       compatible,
-      ...(compatible ? {} : { conversionNeeded: `Convert .${ext} to supported format` }),
+      ...(meta?.contentRef ? { contentRef: meta.contentRef } : {}),
+      ...(compatible ? {} : { conversionNeeded: getConversionSuggestion(name) ?? `Convert .${name.split(".").pop()?.toLowerCase() ?? ""} to supported format` }),
     };
   });
 }
-
-const MIME_MAP: Record<string, string> = {
-  txt: "text/plain",
-  md: "text/markdown",
-  pdf: "application/pdf",
-  csv: "text/csv",
-  json: "application/json",
-  py: "text/x-python",
-  js: "text/javascript",
-  ts: "text/typescript",
-  html: "text/html",
-  xml: "text/xml",
-  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-  png: "image/png",
-  jpg: "image/jpeg",
-  jpeg: "image/jpeg",
-  gif: "image/gif",
-  svg: "image/svg+xml",
-};
-
-const COMPATIBLE_EXTENSIONS = new Set([
-  "txt",
-  "md",
-  "pdf",
-  "csv",
-  "json",
-  "py",
-  "js",
-  "ts",
-  "html",
-  "xml",
-  "docx",
-]);
 
 // ─── Topic Extraction ────────────────────────────────────────
 
@@ -371,7 +346,7 @@ function buildWorkspaceFromGPT(
   const topics = extractTopicsFromConversations(relatedConvs);
   const translation = translateForClaude(gpt.instructions);
   const capabilities = mapCapabilities(gpt.instructions);
-  const knowledgeFiles = mapKnowledgeFileNames(gpt.knowledgeFileNames);
+  const knowledgeFiles = mapKnowledgeFiles(gpt.knowledgeFileNames);
   const category = categorizeWorkspace(gpt.name, gpt.instructions, topics);
 
   const capWarnings = generateCapabilityWarnings(
@@ -435,7 +410,10 @@ function buildWorkspaceFromProject(
 ): Workspace {
   const translation = translateForClaude(project.instructions);
   const capabilities = mapCapabilities(project.instructions);
-  const knowledgeFiles = mapKnowledgeFileNames(project.knowledgeFileNames);
+  const knowledgeFiles = mapKnowledgeFiles(
+    project.knowledgeFileNames,
+    project.knowledgeFileMetadata,
+  );
   const category = categorizeWorkspace(project.name, project.instructions, []);
 
   const capWarnings = generateCapabilityWarnings(

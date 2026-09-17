@@ -1,6 +1,7 @@
 import type { Workspace } from "@/core/schema/types";
 import ConfidenceBadge from "./ConfidenceBadge";
 import WarningBadge from "./WarningBadge";
+import FileCompatibilityList from "./FileCompatibilityList";
 
 export interface WorkspaceCardProps {
   workspace: Workspace;
@@ -96,6 +97,11 @@ export default function WorkspaceCard({
             </p>
           )}
         </div>
+      )}
+
+      {/* File compatibility */}
+      {accepted && knowledgeFiles.length > 0 && (
+        <FileCompatibilityList files={knowledgeFiles} />
       )}
 
       {/* Edit button */}

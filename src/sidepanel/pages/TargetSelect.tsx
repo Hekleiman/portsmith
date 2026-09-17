@@ -25,8 +25,8 @@ const PLATFORMS = [
   },
 ] as const;
 
-/** Only Claude is enabled as a target in V1. */
-const V1_ENABLED_TARGETS = new Set(["claude"]);
+/** All platforms are enabled as migration targets. */
+const ENABLED_TARGETS = new Set(["chatgpt", "claude", "gemini"]);
 
 export default function TargetSelect(): React.JSX.Element {
   const sourcePlatform = useMigrationStore((s) => s.sourcePlatform);
@@ -47,7 +47,7 @@ export default function TargetSelect(): React.JSX.Element {
       </div>
       <div className="flex flex-col gap-2">
         {available.map((p) => {
-          const enabled = V1_ENABLED_TARGETS.has(p.id);
+          const enabled = ENABLED_TARGETS.has(p.id);
           return (
             <PlatformCard
               key={p.id}

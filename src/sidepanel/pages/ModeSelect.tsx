@@ -1,7 +1,12 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import type { DeliveryMode } from "@/core/storage/migration-state";
 import ModeCard from "../components/ModeCard";
 import { useMigrationStore } from "../store/migration-store";
+
+const TARGET_LABELS: Record<string, string> = {
+  claude: "Claude",
+  gemini: "Gemini",
+};
 
 const MODES: {
   id: DeliveryMode;
@@ -90,6 +95,28 @@ const MODES: {
 export default function ModeSelect(): React.JSX.Element {
   const deliveryMode = useMigrationStore((s) => s.deliveryMode);
   const setDeliveryMode = useMigrationStore((s) => s.setDeliveryMode);
+  const targetPlatform = useMigrationStore((s) => s.targetPlatform);
+  const targetName = TARGET_LABELS[targetPlatform ?? "claude"] ?? "the target";
+
+  const isGeminiTarget = targetPlatform === "gemini";
+
+  // For Gemini target, adjust autofill description since it uses API not DOM
+  const modes = useMemo(
+    () =>
+      MODES.map((m) => {
+        if (!isGeminiTarget) return m;
+        if (m.id === "autofill") {
+          return {
+            ...m,
+            description:
+              "Extension creates Gems via Gemini's API. Fastest and most reliable.",
+            cons: ["Requires Gemini tab open"],
+          };
+        }
+        return m;
+      }),
+    [isGeminiTarget],
+  );
 
   // Pre-select Hybrid as default
   useEffect(() => {
@@ -105,11 +132,11 @@ export default function ModeSelect(): React.JSX.Element {
           How should we import?
         </h2>
         <p className="mt-1 text-sm text-gray-500">
-          Choose how PortSmith delivers your data into Claude.
+          Choose how PortSmith delivers your data into {targetName}.
         </p>
       </div>
       <div className="flex flex-col gap-2">
-        {MODES.map((m) => (
+        {modes.map((m) => (
           <ModeCard
             key={m.id}
             title={m.title}

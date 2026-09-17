@@ -8,13 +8,13 @@ import type { SelectorStrategy } from "@/content-scripts/common/selector-engine"
 // each selector was confirmed working. When selectors break, update
 // the strategies and bump lastVerified.
 
-const VERIFIED = "2026-02-28";
+const VERIFIED = "2026-03-16";
 
 // ─── Projects Page ──────────────────────────────────────────
 // URL: claude.ai/projects
 
 export const PROJECTS = {
-  /** "Create a project" button on the projects listing page */
+  /** "New project" button on the projects listing page */
   createButton: [
     {
       priority: 1,
@@ -25,19 +25,25 @@ export const PROJECTS = {
     {
       priority: 2,
       type: "text",
-      value: "Create a project",
+      value: "New project",
       lastVerified: VERIFIED,
     },
     {
       priority: 3,
+      type: "text",
+      value: "Create a project",
+      lastVerified: VERIFIED,
+    },
+    {
+      priority: 4,
       type: "css",
       value: "a[href='/projects/create'], button[aria-label*='Create']",
       lastVerified: VERIFIED,
     },
     {
-      priority: 4,
-      type: "xpath",
-      value: "//button[contains(text(),'Create')] | //a[contains(text(),'Create a project')]",
+      priority: 5,
+      type: "text",
+      value: "New",
       lastVerified: VERIFIED,
     },
   ] satisfies SelectorStrategy[],
@@ -157,14 +163,20 @@ export const PROJECT_FORM = {
     },
     {
       priority: 3,
+      type: "text",
+      value: "Save",
+      lastVerified: VERIFIED,
+    },
+    {
+      priority: 4,
       type: "css",
       value: "button[type='submit'], button[aria-label*='Save'], button[aria-label*='Create']",
       lastVerified: VERIFIED,
     },
     {
-      priority: 4,
-      type: "xpath",
-      value: "//button[contains(text(),'Create project')] | //button[contains(text(),'Save')]",
+      priority: 5,
+      type: "text",
+      value: "Create",
       lastVerified: VERIFIED,
     },
   ] satisfies SelectorStrategy[],
@@ -172,7 +184,7 @@ export const PROJECT_FORM = {
 
 // ─── Project Dashboard (post-creation) ──────────────────────
 // URL: claude.ai/project/:id
-// After clicking "Create project" on the modal, the SPA navigates
+// After clicking "Create project" on the creation page, the SPA navigates
 // to the project dashboard where instructions, files, and chat live.
 
 export const PROJECT_DASHBOARD = {

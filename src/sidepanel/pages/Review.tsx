@@ -179,10 +179,15 @@ export default function Review(): React.JSX.Element {
 
   // ─── Stats ───────────────────────────────────────────────
 
-  const totalFiles = manifest.workspaces.reduce(
-    (sum, w) => sum + w.knowledgeFiles.length,
-    0,
-  );
+  const allFiles = manifest.workspaces.flatMap((w) => w.knowledgeFiles);
+  const totalFiles = allFiles.length;
+  const compatibleFiles = allFiles.filter((f) => f.compatible).length;
+  const conversionFiles = allFiles.filter(
+    (f) => !f.compatible && f.conversionNeeded,
+  ).length;
+  const unsupportedFiles = allFiles.filter(
+    (f) => !f.compatible && !f.conversionNeeded,
+  ).length;
 
   const allWarnings = manifest.workspaces.flatMap((w) =>
     w.migration.warnings.map((msg) => ({ workspace: w.name, msg })),
@@ -217,6 +222,22 @@ export default function Review(): React.JSX.Element {
             {totalFiles} file{totalFiles !== 1 ? "s" : ""}
           </span>
         </p>
+        {totalFiles > 0 && (
+          <p className="mt-1 text-xs text-gray-500">
+            <span className="text-green-600">{compatibleFiles} compatible</span>
+            {conversionFiles > 0 && (
+              <span className="text-amber-600">
+                , {conversionFiles} need{conversionFiles === 1 ? "s" : ""}{" "}
+                conversion
+              </span>
+            )}
+            {unsupportedFiles > 0 && (
+              <span className="text-red-500">
+                , {unsupportedFiles} unsupported
+              </span>
+            )}
+          </p>
+        )}
       </div>
 
       {/* Workspaces */}

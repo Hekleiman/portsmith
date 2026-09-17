@@ -204,7 +204,7 @@ describe("generateManifest", () => {
 
   it("maps knowledge file names to KnowledgeFile objects", () => {
     const gpt = makeGPT({
-      knowledgeFileNames: ["style-guide.md", "api-docs.pdf", "data.xlsx"],
+      knowledgeFileNames: ["style-guide.md", "api-docs.pdf", "slides.pptx"],
     });
     const manifest = generateManifest(makeRawData(), {
       customGPTs: [gpt],
@@ -214,9 +214,9 @@ describe("generateManifest", () => {
     expect(files[0]!.originalName).toBe("style-guide.md");
     expect(files[0]!.mimeType).toBe("text/markdown");
     expect(files[0]!.compatible).toBe(true);
-    expect(files[2]!.originalName).toBe("data.xlsx");
+    expect(files[2]!.originalName).toBe("slides.pptx");
     expect(files[2]!.compatible).toBe(false);
-    expect(files[2]!.conversionNeeded).toContain("xlsx");
+    expect(files[2]!.conversionNeeded).toContain("PDF");
   });
 
   it("detects capabilities from instructions", () => {

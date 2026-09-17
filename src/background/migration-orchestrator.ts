@@ -6,12 +6,13 @@ import type {
   MigrationGuidedInstructions,
   InstructionsDelivery,
 } from "@/shared/messaging";
-import { onMessage } from "@/shared/messaging";
+import { onMessage, safeSendTabMessage } from "@/shared/messaging";
 import { autofillWorkspace } from "@/core/adapters/claude-autofill";
 import {
   generateInstructions,
   generateMemoryInstructions,
 } from "@/core/adapters/claude-adapter";
+import { generateGeminiInstructions } from "@/core/adapters/gemini-guided";
 import {
   loadManifest,
   saveCheckpoint,
@@ -25,6 +26,7 @@ import {
 class MigrationOrchestrator {
   private phase: OrchestratorStatus["phase"] = "idle";
   private mode: DeliveryMode | null = null;
+  private targetPlatform: string = "claude";
   private manifestId: string | null = null;
   private manifest: PortsmithManifest | null = null;
   private workspaceIds: string[] = [];
@@ -40,6 +42,9 @@ class MigrationOrchestrator {
   private guidedInstructions: MigrationGuidedInstructions | null = null;
   private memorySteps: MigrationStepFallback[] = [];
   private instructionsDelivery: Record<string, InstructionsDelivery> = {};
+  private verifiedWorkspaceIds: string[] = [];
+  private migrationTabId: number | null = null;
+  private duplicateTabWarning: string | null = null;
 
   // Resolvers for async coordination
   private confirmResolver: ((confirmed: boolean) => void) | null = null;
@@ -54,6 +59,7 @@ class MigrationOrchestrator {
     manifestId: string,
     mode: DeliveryMode,
     workspaceIds: string[],
+    targetPlatform?: string,
   ): Promise<boolean> {
     if (this.phase === "running") return false;
 
@@ -64,9 +70,14 @@ class MigrationOrchestrator {
     this.manifest = record.data;
     this.manifestId = manifestId;
     this.mode = mode;
+    this.targetPlatform = targetPlatform ?? "claude";
     this.workspaceIds = workspaceIds;
     this.phase = "running";
-    this.memorySteps = generateMemoryInstructions(this.manifest.memory);
+    this.memorySteps =
+      this.targetPlatform === "claude"
+        ? generateMemoryInstructions(this.manifest.memory)
+        : [];
+    this.duplicateTabWarning = await this.checkDuplicateTabs();
 
     void this.processWorkspaces();
     return true;
@@ -102,6 +113,7 @@ class MigrationOrchestrator {
     this.manifest = record.data;
     this.manifestId = snap.manifestId;
     this.mode = snap.deliveryMode;
+    this.targetPlatform = snap.targetPlatform ?? "claude";
     this.workspaceIds = snap.selectedWorkspaceIds;
     this.completedWorkspaceIds = [...snap.completedWorkspaceIds];
     this.currentWorkspaceIndex = ckpt.workspaceIndex;
@@ -109,7 +121,10 @@ class MigrationOrchestrator {
       ? { ...snap.instructionsDelivery }
       : {};
     this.phase = "running";
-    this.memorySteps = generateMemoryInstructions(this.manifest.memory);
+    this.memorySteps =
+      this.targetPlatform === "claude"
+        ? generateMemoryInstructions(this.manifest.memory)
+        : [];
 
     void this.processWorkspaces();
     return true;
@@ -170,6 +185,8 @@ class MigrationOrchestrator {
       currentWorkspaceInstructions:
         instr && instr.length > 0 ? instr : null,
       clipboardInstructions,
+      verifiedWorkspaceIds: [...this.verifiedWorkspaceIds],
+      duplicateTabWarning: this.duplicateTabWarning ?? undefined,
     };
   }
 
@@ -252,6 +269,60 @@ class MigrationOrchestrator {
     return null;
   }
 
+  private async validateAndPinTab(): Promise<number | null> {
+    // If we already have a pinned tab, validate it still exists and is usable
+    if (this.migrationTabId !== null) {
+      try {
+        const tab = await chrome.tabs.get(this.migrationTabId);
+        if (tab && !tab.discarded) {
+          // Tab still exists — ping content script
+          try {
+            await safeSendTabMessage(this.migrationTabId, "PING");
+            return this.migrationTabId;
+          } catch {
+            // Content script not responding — tab may have navigated away
+            // Fall through to re-pin
+          }
+        }
+      } catch {
+        // Tab was closed — fall through to re-pin
+      }
+      this.migrationTabId = null;
+    }
+
+    // Pin a new tab via existing logic
+    const tabId = await this.getTabForAutofill();
+    if (tabId !== null) {
+      this.migrationTabId = tabId;
+    }
+    return tabId;
+  }
+
+  private async checkDuplicateTabs(): Promise<string | null> {
+    const urlPattern =
+      this.targetPlatform === "gemini"
+        ? "https://gemini.google.com/*"
+        : "https://claude.ai/*";
+    const platformName =
+      this.targetPlatform === "gemini" ? "Gemini" : "Claude";
+
+    try {
+      const tabs = await chrome.tabs.query({ url: urlPattern });
+      if (tabs.length > 1) {
+        return `${tabs.length} ${platformName} tabs detected. Close extra tabs to avoid conflicts.`;
+      }
+    } catch {
+      /* ignore */
+    }
+    return null;
+  }
+
+  onTabClosed(tabId: number): void {
+    if (this.migrationTabId === tabId) {
+      this.migrationTabId = null;
+    }
+  }
+
   private async processWorkspaces(): Promise<void> {
     while (this.currentWorkspaceIndex < this.workspaceIds.length) {
       if (this.cancelRequested) return;
@@ -272,10 +343,18 @@ class MigrationOrchestrator {
         continue;
       }
 
-      if (this.mode === "guided") {
-        await this.processGuidedWorkspace(workspace);
+      if (this.targetPlatform === "gemini") {
+        if (this.mode === "guided") {
+          await this.processGeminiGuidedWorkspace(workspace);
+        } else {
+          await this.processGeminiAutofillWorkspace(workspace);
+        }
       } else {
-        await this.processAutofillWorkspace(workspace);
+        if (this.mode === "guided") {
+          await this.processGuidedWorkspace(workspace);
+        } else {
+          await this.processAutofillWorkspace(workspace);
+        }
       }
 
       if (this.cancelRequested) return;
@@ -310,7 +389,7 @@ class MigrationOrchestrator {
   }
 
   private async processAutofillWorkspace(workspace: Workspace): Promise<void> {
-    const tabId = await this.getTabForAutofill();
+    const tabId = await this.validateAndPinTab();
     if (tabId === null) {
       const error = "No browser tab available for migration.";
       console.warn(
@@ -352,8 +431,13 @@ class MigrationOrchestrator {
           this.instructionsDelivery[workspace.id] = step.instructionsDelivery;
         }
 
-        // Hybrid: pause at pending status for user confirmation
-        if (isHybrid && step.status === "pending") {
+        // Track API verification results
+        if (step.verified === true) {
+          this.verifiedWorkspaceIds.push(workspace.id);
+        }
+
+        // Pause at pending status for user confirmation (hybrid steps + manual steps)
+        if (step.status === "pending") {
           this.pendingConfirmStepId = step.id;
           this.updateStep(step);
 
@@ -414,6 +498,140 @@ class MigrationOrchestrator {
     }
   }
 
+  // ─── Gemini Target ──────────────────────────────────────
+
+  private async processGeminiGuidedWorkspace(
+    workspace: Workspace,
+  ): Promise<void> {
+    const instructions = generateGeminiInstructions(workspace);
+    this.guidedInstructions = instructions;
+
+    await new Promise<void>((resolve) => {
+      this.guidedResolver = resolve;
+    });
+    this.guidedResolver = null;
+
+    this.completedWorkspaceIds.push(workspace.id);
+  }
+
+  private async processGeminiAutofillWorkspace(
+    workspace: Workspace,
+  ): Promise<void> {
+    this.currentSteps = [];
+    this.instructionsDelivery[workspace.id] = "pending";
+
+    const stepId = `${workspace.id}-create`;
+    this.updateStep({
+      id: stepId,
+      title: `Creating Gem "${workspace.name}"`,
+      status: "running",
+    });
+
+    const tabId = await this.findGeminiTab();
+    if (tabId === null) {
+      this.updateStep({
+        id: stepId,
+        title: `Creating Gem "${workspace.name}"`,
+        status: "failed",
+        fallback: {
+          id: stepId,
+          title: "Open Gemini",
+          description:
+            "No Gemini tab found. Open gemini.google.com and sign in.",
+          copyBlocks: [],
+          link: "https://gemini.google.com",
+        },
+      });
+      this.failedWorkspaces.push({
+        id: workspace.id,
+        name: workspace.name,
+        error: "No Gemini tab found",
+      });
+      return;
+    }
+
+    try {
+      const instructions = workspace.instructions.raw;
+      const result = await safeSendTabMessage(tabId, "GEMINI_CREATE_GEM", {
+        name: workspace.name,
+        description: workspace.description,
+        instructions,
+      });
+
+      if (result.success) {
+        this.updateStep({
+          id: stepId,
+          title: `Created Gem "${workspace.name}"`,
+          status: "success",
+        });
+        this.instructionsDelivery[workspace.id] = "autofilled";
+        this.completedWorkspaceIds.push(workspace.id);
+      } else {
+        // API failed — show guided fallback
+        const fallbackSteps = result.fallback?.steps ?? [];
+        this.updateStep({
+          id: stepId,
+          title: `Gem "${workspace.name}" — manual steps needed`,
+          status: "fallback",
+          fallback: {
+            id: stepId,
+            title: "Create Gem manually",
+            description: fallbackSteps.join("\n"),
+            copyBlocks: [
+              { label: "Gem name", content: workspace.name },
+              ...(workspace.description
+                ? [
+                    {
+                      label: "Description",
+                      content: workspace.description,
+                    },
+                  ]
+                : []),
+              ...(instructions
+                ? [{ label: "Instructions", content: instructions }]
+                : []),
+            ],
+            link: "https://gemini.google.com/gems/new",
+          },
+        });
+        this.instructionsDelivery[workspace.id] = "manual";
+        // Still count as completed — user has the fallback info
+        this.completedWorkspaceIds.push(workspace.id);
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      this.updateStep({
+        id: stepId,
+        title: `Failed to create "${workspace.name}"`,
+        status: "failed",
+      });
+      this.failedWorkspaces.push({
+        id: workspace.id,
+        name: workspace.name,
+        error: errorMsg,
+      });
+    }
+  }
+
+  private async findGeminiTab(): Promise<number | null> {
+    try {
+      const active = await chrome.tabs.query({
+        url: "https://gemini.google.com/*",
+        active: true,
+        currentWindow: true,
+      });
+      if (active.length > 0 && active[0]?.id != null) return active[0].id;
+
+      const all = await chrome.tabs.query({
+        url: "https://gemini.google.com/*",
+      });
+      if (all.length > 0 && all[0]?.id != null) return all[0].id;
+    } catch {
+      // Not in extension context
+    }
+    return null;
+  }
+
   private updateStep(step: MigrationStep): void {
     const idx = this.currentSteps.findIndex((s) => s.id === step.id);
     if (idx >= 0) {
@@ -426,10 +644,12 @@ class MigrationOrchestrator {
   private async checkpointState(): Promise<void> {
     if (!this.manifestId || !this.mode) return;
 
+    const sourcePlatform =
+      this.manifest?.source.platform ?? "chatgpt";
     const snapshot: MigrationStateSnapshot = {
       phase: "migrating",
-      sourcePlatform: "chatgpt",
-      targetPlatform: "claude",
+      sourcePlatform,
+      targetPlatform: this.targetPlatform,
       extractionMethod: null,
       deliveryMode: this.mode,
       manifestId: this.manifestId,
@@ -446,6 +666,7 @@ class MigrationOrchestrator {
     this.manifestId = null;
     this.manifest = null;
     this.mode = null;
+    this.targetPlatform = "claude";
     this.workspaceIds = [];
     this.currentWorkspaceIndex = 0;
     this.completedWorkspaceIds = [];
@@ -457,9 +678,12 @@ class MigrationOrchestrator {
     this.guidedResolver = null;
     this.memorySteps = [];
     this.instructionsDelivery = {};
+    this.verifiedWorkspaceIds = [];
     this.cancelRequested = false;
     this.pauseRequested = false;
     this.pauseResolver = null;
+    this.migrationTabId = null;
+    this.duplicateTabWarning = null;
   }
 }
 
@@ -473,6 +697,7 @@ export function registerOrchestratorHandlers(): void {
       payload.manifestId,
       payload.mode,
       payload.workspaceIds,
+      payload.targetPlatform,
     );
     return { success };
   });
@@ -513,6 +738,10 @@ export function registerOrchestratorHandlers(): void {
         payload.delivery,
       ),
     };
+  });
+
+  chrome.tabs.onRemoved.addListener((tabId) => {
+    orchestrator.onTabClosed(tabId);
   });
 }
 

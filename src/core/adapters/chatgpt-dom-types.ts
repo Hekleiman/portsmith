@@ -12,6 +12,17 @@ export interface ExtractedCustomGPT {
   knowledgeFileNames: string[];
 }
 
+/** File metadata from the ChatGPT gizmo API response. */
+export interface ExtractedFileMetadata {
+  name: string;
+  type?: string;
+  size?: number;
+  /** ChatGPT file ID (e.g. "file-2xKZ..."), needed for blob download. */
+  id?: string;
+  /** Reference to stored blob in IndexedDB (set after successful download). */
+  contentRef?: string;
+}
+
 /** A ChatGPT Project — maps directly to a Claude Project. */
 export interface ExtractedChatGPTProject {
   /** Project ID extracted from URL (e.g. the UUID from /project/<id>) */
@@ -20,6 +31,8 @@ export interface ExtractedChatGPTProject {
   description: string;
   instructions: string;
   knowledgeFileNames: string[];
+  /** Rich file metadata from API (when available). */
+  knowledgeFileMetadata?: ExtractedFileMetadata[];
   conversationCount: number;
 }
 

@@ -6,14 +6,14 @@ const METHODS: {
   id: TExtractionMethod;
   title: string;
   description: string;
-  recommended?: boolean;
+  badge?: string;
   icon: React.ReactNode;
 }[] = [
   {
     id: "upload",
-    title: "Upload Data Export",
+    title: "Upload a backup file",
     description:
-      "Upload your ChatGPT data export ZIP file. Includes conversations, custom GPTs, and more.",
+      "Download a copy of your ChatGPT data, then upload it here. Takes about 5 minutes — we'll walk you through it.",
     icon: (
       <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-violet-100">
         <svg
@@ -34,9 +34,10 @@ const METHODS: {
   },
   {
     id: "browser",
-    title: "Extract from Browser",
+    title: "Read from your ChatGPT account",
     description:
-      "Read data directly from chatgpt.com. You must be logged in to your ChatGPT account.",
+      "Already logged into ChatGPT in this browser? We can read your projects and settings directly. No download needed.",
+    badge: "Quickest",
     icon: (
       <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-sky-100">
         <svg
@@ -57,10 +58,10 @@ const METHODS: {
   },
   {
     id: "both",
-    title: "Both",
+    title: "Both (recommended)",
     description:
-      "Combines file export and browser extraction for the richest, most complete data.",
-    recommended: true,
+      "Upload your backup file AND read from your account. This gives the most complete picture of your ChatGPT setup.",
+    badge: "Most Complete",
     icon: (
       <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-100">
         <svg
@@ -87,10 +88,10 @@ export default function ExtractionMethod(): React.JSX.Element {
     <div className="flex flex-col gap-4">
       <div>
         <h2 className="text-lg font-semibold text-gray-900">
-          How should we get your data?
+          How should we get your stuff?
         </h2>
         <p className="mt-1 text-sm text-gray-500">
-          Choose how to extract data from ChatGPT.
+          Pick the way that works best for you.
         </p>
       </div>
       <div className="flex flex-col gap-2">
@@ -101,7 +102,7 @@ export default function ExtractionMethod(): React.JSX.Element {
             description={m.description}
             icon={m.icon}
             selected={extractionMethod === m.id}
-            recommended={m.recommended}
+            badge={m.badge}
             onClick={() => setExtractionMethod(m.id)}
           />
         ))}

@@ -121,8 +121,8 @@ describe("File CRUD", () => {
 
   it("saves and loads a file blob round-trip", async () => {
     const content = "# Style Guide\nUse TypeScript strict mode.";
-    const blob = new Blob([content], { type: "text/markdown" });
-    await saveFile("kf-001", blob, "text/markdown", "style-guide.md");
+    const base64 = btoa(content);
+    await saveFile("kf-001", base64, "text/markdown", "style-guide.md");
 
     const record = await loadFile("kf-001");
     expect(record).toBeDefined();
@@ -130,8 +130,8 @@ describe("File CRUD", () => {
     expect(record!.mimeType).toBe("text/markdown");
     expect(record!.originalName).toBe("style-guide.md");
 
-    const text = await record!.blob.text();
-    expect(text).toBe(content);
+    const decoded = atob(record!.blob);
+    expect(decoded).toBe(content);
   });
 
   it("returns undefined for non-existent file", async () => {
@@ -140,14 +140,14 @@ describe("File CRUD", () => {
   });
 
   it("overwrites an existing file", async () => {
-    const blob1 = new Blob(["v1"], { type: "text/plain" });
-    const blob2 = new Blob(["v2"], { type: "text/plain" });
-    await saveFile("f-001", blob1, "text/plain", "file.txt");
-    await saveFile("f-001", blob2, "text/plain", "file.txt");
+    const base64v1 = btoa("v1");
+    const base64v2 = btoa("v2");
+    await saveFile("f-001", base64v1, "text/plain", "file.txt");
+    await saveFile("f-001", base64v2, "text/plain", "file.txt");
 
     const record = await loadFile("f-001");
-    const text = await record!.blob.text();
-    expect(text).toBe("v2");
+    const decoded = atob(record!.blob);
+    expect(decoded).toBe("v2");
   });
 });
 

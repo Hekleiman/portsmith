@@ -4,6 +4,7 @@ import CopyBlock from "./CopyBlock";
 export interface StepCardProps {
   step: ImportStep;
   stepNumber: number;
+  totalSteps: number;
   done: boolean;
   onToggleDone: () => void;
 }
@@ -11,6 +12,7 @@ export interface StepCardProps {
 export default function StepCard({
   step,
   stepNumber,
+  totalSteps,
   done,
   onToggleDone,
 }: StepCardProps): React.JSX.Element {
@@ -20,6 +22,13 @@ export default function StepCard({
         done ? "border-green-200 bg-green-50/50" : "border-gray-200"
       }`}
     >
+      {/* Step counter */}
+      {totalSteps > 0 && (
+        <div className="mb-1 text-xs font-medium text-slate-400">
+          Step {stepNumber} of {totalSteps}
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-start gap-3">
         <span
@@ -33,7 +42,16 @@ export default function StepCard({
         </span>
         <div className="min-w-0 flex-1">
           <h3 className="text-sm font-semibold text-gray-900">{step.title}</h3>
-          <p className="mt-0.5 text-xs text-gray-500">{step.description}</p>
+          <p className="mt-0.5 whitespace-pre-line text-xs text-gray-500">
+            {step.description}
+          </p>
+
+          {/* Action hint */}
+          {step.actionHint && (
+            <div className="mt-2 flex items-center gap-1.5 text-sm font-medium text-blue-600">
+              <span>{"\u2192"}</span> {step.actionHint}
+            </div>
+          )}
 
           {/* Link */}
           {step.link && (
@@ -58,28 +76,20 @@ export default function StepCard({
 
           {/* File list */}
           {step.fileNames && step.fileNames.length > 0 && (
-            <ul className="mt-2 space-y-1">
+            <div className="mt-3 space-y-1">
+              <div className="mb-1 text-xs font-medium text-slate-500">
+                Ready to upload:
+              </div>
               {step.fileNames.map((name) => (
-                <li
+                <div
                   key={name}
-                  className="flex items-center gap-1.5 text-xs text-gray-600"
+                  className="flex items-center gap-2 py-0.5 text-xs text-slate-700"
                 >
-                  <svg
-                    className="h-3.5 w-3.5 shrink-0 text-gray-400"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
-                    <polyline points="14 2 14 8 20 8" />
-                  </svg>
-                  {name}
-                </li>
+                  <span className="text-green-500">{"\u2713"}</span>
+                  <span>{name}</span>
+                </div>
               ))}
-            </ul>
+            </div>
           )}
         </div>
       </div>

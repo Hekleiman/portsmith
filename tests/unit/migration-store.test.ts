@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import "fake-indexeddb/auto";
 import { _resetForTests } from "@/core/storage/indexed-db";
 import {
@@ -8,7 +8,34 @@ import {
   TOTAL_STEPS,
 } from "@/sidepanel/store/migration-store";
 
+// Mock chrome.storage.local for preference persistence
+let prefStore: Record<string, unknown> = {};
+vi.stubGlobal("chrome", {
+  storage: {
+    local: {
+      get: vi.fn(async (keys: string | string[]) => {
+        const keyArray = Array.isArray(keys) ? keys : [keys];
+        const result: Record<string, unknown> = {};
+        for (const k of keyArray) {
+          if (k in prefStore) result[k] = prefStore[k];
+        }
+        return result;
+      }),
+      set: vi.fn(async (items: Record<string, unknown>) => {
+        Object.assign(prefStore, items);
+      }),
+      remove: vi.fn(async (keys: string | string[]) => {
+        const keyArray = Array.isArray(keys) ? keys : [keys];
+        for (const k of keyArray) {
+          delete prefStore[k];
+        }
+      }),
+    },
+  },
+});
+
 beforeEach(async () => {
+  prefStore = {};
   await _resetForTests();
   useMigrationStore.setState({
     phase: "idle",

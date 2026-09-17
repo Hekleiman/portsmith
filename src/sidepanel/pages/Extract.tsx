@@ -16,6 +16,8 @@ import type { ExtractionMethod } from "@/core/storage/migration-state";
 import type { TrackedStep } from "../components/ProgressTracker";
 import FileUpload from "../components/FileUpload";
 import ProgressTracker from "../components/ProgressTracker";
+import ClaudeExtract from "./ClaudeExtract";
+import GeminiExtract from "./GeminiExtract";
 
 // ─── Step Definitions ────────────────────────────────────────
 
@@ -25,7 +27,7 @@ function buildSteps(method: ExtractionMethod): TrackedStep[] {
   if (method === "upload" || method === "both") {
     steps.push({
       id: "parse",
-      label: "Parsing export file...",
+      label: "Processing your backup file...",
       status: "pending",
     });
   }
@@ -34,23 +36,23 @@ function buildSteps(method: ExtractionMethod): TrackedStep[] {
     steps.push(
       {
         id: "scan_sidebar",
-        label: "Scanning sidebar...",
+        label: "Looking through your ChatGPT sidebar...",
         status: "pending",
       },
       {
         id: "projects",
-        label: "Extracting projects...",
+        label: "Finding your projects...",
         status: "pending",
       },
       {
         id: "custom_gpts",
-        label: "Reading Custom GPTs...",
+        label: "Finding your custom GPTs...",
         status: "pending",
       },
-      { id: "memory", label: "Reading memory...", status: "pending" },
+      { id: "memory", label: "Finding saved memories...", status: "pending" },
       {
         id: "instructions",
-        label: "Reading custom instructions...",
+        label: "Finding your custom instructions...",
         status: "pending",
       },
     );
@@ -58,7 +60,7 @@ function buildSteps(method: ExtractionMethod): TrackedStep[] {
 
   steps.push({
     id: "manifest",
-    label: "Generating manifest...",
+    label: "Putting it all together...",
     status: "pending",
   });
 
@@ -87,6 +89,20 @@ async function findChatGPTTab(): Promise<number> {
 type Phase = "idle" | "running" | "complete" | "error";
 
 export default function Extract(): React.JSX.Element {
+  const sourcePlatform = useMigrationStore((s) => s.sourcePlatform);
+
+  // Delegate to platform-specific extraction page
+  if (sourcePlatform === "claude") {
+    return <ClaudeExtract />;
+  }
+  if (sourcePlatform === "gemini") {
+    return <GeminiExtract />;
+  }
+
+  return <ChatGPTExtract />;
+}
+
+function ChatGPTExtract(): React.JSX.Element {
   const extractionMethod = useMigrationStore((s) => s.extractionMethod);
   const nextStep = useMigrationStore((s) => s.nextStep);
   const setManifestId = useMigrationStore((s) => s.setManifestId);
@@ -429,6 +445,73 @@ export default function Extract(): React.JSX.Element {
     setStartedAt(null);
   }, [method]);
 
+  // ─── ChatGPT tab detection ────────────────────────────────
+
+  const [chatgptStatus, setChatgptStatus] = useState<
+    "checking" | "ready" | "not_found" | "not_responding"
+  >("checking");
+  const [chatgptTabLocation, setChatgptTabLocation] = useState("");
+
+  const checkForChatGPT = useCallback(async () => {
+    setChatgptStatus("checking");
+    try {
+      const tabs = await chrome.tabs.query({
+        url: ["https://chatgpt.com/*", "https://chat.openai.com/*"],
+      });
+      if (tabs.length === 0) {
+        setChatgptStatus("not_found");
+        return;
+      }
+
+      // Prefer the active ChatGPT tab in the current window
+      const currentWindow = await chrome.windows.getCurrent();
+      const sorted = [...tabs].sort((a, b) => {
+        const aScore =
+          (a.windowId === currentWindow.id ? 2 : 0) + (a.active ? 1 : 0);
+        const bScore =
+          (b.windowId === currentWindow.id ? 2 : 0) + (b.active ? 1 : 0);
+        return bScore - aScore;
+      });
+
+      const bestTab = sorted[0];
+      if (!bestTab || bestTab.id == null) {
+        setChatgptStatus("not_found");
+        return;
+      }
+
+      const tabId = bestTab.id;
+
+      try {
+        const response = await safeSendTabMessage(tabId, "PING");
+        if (response?.pong) {
+          setChatgptStatus("ready");
+
+          if (bestTab.windowId !== currentWindow.id) {
+            setChatgptTabLocation("in another window");
+          } else if (!bestTab.active) {
+            setChatgptTabLocation("in another tab");
+          } else {
+            setChatgptTabLocation("");
+          }
+        } else {
+          setChatgptStatus("not_responding");
+        }
+      } catch {
+        setChatgptStatus("not_responding");
+      }
+    } catch {
+      setChatgptStatus("not_found");
+    }
+  }, []);
+
+  const needsBrowserCheck = method === "browser" || method === "both";
+
+  useEffect(() => {
+    if (needsBrowserCheck) {
+      void checkForChatGPT();
+    }
+  }, [needsBrowserCheck, checkForChatGPT]);
+
   // ─── Render ─────────────────────────────────────────────
 
   if (phase === "idle") {
@@ -436,29 +519,123 @@ export default function Extract(): React.JSX.Element {
       return (
         <div className="flex flex-1 flex-col">
           <h2 className="text-lg font-semibold text-gray-900">
-            Extract from Browser
+            Reading from your ChatGPT account
           </h2>
           <p className="mt-1 text-sm text-gray-500">
-            We'll scan your ChatGPT sidebar for Projects and GPTs, then visit
-            each one to extract its configuration.
+            We'll look through your ChatGPT account for projects, custom GPTs,
+            memories, and settings.
           </p>
 
-          <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
-            <h3 className="text-sm font-medium text-amber-800">
-              Before starting:
-            </h3>
-            <ul className="mt-2 space-y-1 text-sm text-amber-700">
-              <li>1. Open chatgpt.com in another tab</li>
-              <li>2. Make sure you're logged in</li>
-              <li>3. Ensure the sidebar is open (not collapsed)</li>
-            </ul>
+          <div className="mt-4">
+            {chatgptStatus === "checking" && (
+              <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                <svg
+                  className="h-4 w-4 animate-spin text-slate-400"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                >
+                  <circle
+                    className="opacity-25"
+                    cx="12"
+                    cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    strokeWidth="4"
+                  />
+                  <path
+                    className="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                  />
+                </svg>
+                <span className="text-sm text-slate-500">
+                  Looking for ChatGPT...
+                </span>
+              </div>
+            )}
+
+            {chatgptStatus === "ready" && (
+              <div className="flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700">
+                <svg
+                  className="h-4 w-4 shrink-0"
+                  viewBox="0 0 20 20"
+                  fill="currentColor"
+                >
+                  <path
+                    fillRule="evenodd"
+                    d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z"
+                    clipRule="evenodd"
+                  />
+                </svg>
+                <span>
+                  {chatgptTabLocation
+                    ? `Found ChatGPT ${chatgptTabLocation} — ready to go`
+                    : "ChatGPT is open and ready"}
+                </span>
+              </div>
+            )}
+
+            {chatgptStatus === "not_found" && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+                <p className="text-sm font-medium text-amber-800 mb-3">
+                  ChatGPT isn't open yet
+                </p>
+                <div className="space-y-2">
+                  <button
+                    onClick={async () => {
+                      await chrome.tabs.create({
+                        url: "https://chatgpt.com",
+                        active: true,
+                      });
+                      setTimeout(() => void checkForChatGPT(), 3000);
+                    }}
+                    className="w-full rounded-md bg-amber-100 px-3 py-2 text-sm font-medium text-amber-800 transition-colors hover:bg-amber-200"
+                  >
+                    Open ChatGPT for me
+                  </button>
+                  <button
+                    onClick={() => void checkForChatGPT()}
+                    className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-50"
+                  >
+                    I already opened it — check again
+                  </button>
+                </div>
+                <p className="mt-2 text-xs text-amber-600">
+                  Make sure you're logged in after it opens.
+                </p>
+              </div>
+            )}
+
+            {chatgptStatus === "not_responding" && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+                <p className="text-sm font-medium text-amber-800 mb-2">
+                  Found ChatGPT, but can't connect to it
+                </p>
+                <p className="mb-3 text-xs text-amber-600">
+                  Try refreshing your ChatGPT tab, then click the button below.
+                </p>
+                <button
+                  onClick={() => void checkForChatGPT()}
+                  className="w-full rounded-md bg-amber-100 px-3 py-2 text-sm font-medium text-amber-800 transition-colors hover:bg-amber-200"
+                >
+                  Check again
+                </button>
+              </div>
+            )}
           </div>
 
           <button
             onClick={handleStartBrowser}
-            className="mt-6 w-full rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700"
+            disabled={chatgptStatus !== "ready"}
+            className={`mt-6 w-full rounded-lg px-4 py-2.5 text-sm font-medium transition-colors ${
+              chatgptStatus === "ready"
+                ? "bg-blue-600 text-white hover:bg-blue-700"
+                : "cursor-not-allowed bg-slate-100 text-slate-400"
+            }`}
           >
-            Start Extraction
+            {chatgptStatus === "ready"
+              ? "Start Reading"
+              : "Waiting for ChatGPT..."}
           </button>
         </div>
       );
@@ -468,28 +645,73 @@ export default function Extract(): React.JSX.Element {
     return (
       <div className="flex flex-1 flex-col">
         <h2 className="text-lg font-semibold text-gray-900">
-          {method === "both" ? "Upload & Extract" : "Upload Export File"}
+          {method === "both"
+            ? "Step 1 of 2: Upload your backup file"
+            : "Upload your backup file"}
         </h2>
         <p className="mt-1 text-sm text-gray-500">
           {method === "both"
-            ? "Start by uploading your ChatGPT export ZIP. We'll then extract additional data from the browser."
-            : "Upload your ChatGPT data export ZIP file to begin extraction."}
+            ? "First, upload your ChatGPT backup. Then we'll read more from your account."
+            : "Upload the backup file you downloaded from ChatGPT."}
         </p>
+
+        <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+          <h3 className="text-sm font-semibold text-slate-700 mb-3">
+            How to get your ChatGPT backup file
+          </h3>
+          <ol className="space-y-2 text-sm text-slate-600">
+            <li className="flex gap-2">
+              <span className="flex-shrink-0 w-5 h-5 rounded-full bg-blue-100 text-blue-700 text-xs flex items-center justify-center font-bold">1</span>
+              <span>Open <a href="https://chatgpt.com/#settings/DataControls" target="_blank" rel="noopener" className="text-blue-600 underline">ChatGPT Settings &rarr; Data Controls</a></span>
+            </li>
+            <li className="flex gap-2">
+              <span className="flex-shrink-0 w-5 h-5 rounded-full bg-blue-100 text-blue-700 text-xs flex items-center justify-center font-bold">2</span>
+              <span>Click <strong>&ldquo;Export data&rdquo;</strong>, then <strong>&ldquo;Confirm export&rdquo;</strong></span>
+            </li>
+            <li className="flex gap-2">
+              <span className="flex-shrink-0 w-5 h-5 rounded-full bg-blue-100 text-blue-700 text-xs flex items-center justify-center font-bold">3</span>
+              <span>Check your email — OpenAI will send you a download link (usually within a few minutes, sometimes up to 24 hours)</span>
+            </li>
+            <li className="flex gap-2">
+              <span className="flex-shrink-0 w-5 h-5 rounded-full bg-blue-100 text-blue-700 text-xs flex items-center justify-center font-bold">4</span>
+              <span>Click the link in the email to download a <strong>.zip file</strong></span>
+            </li>
+            <li className="flex gap-2">
+              <span className="flex-shrink-0 w-5 h-5 rounded-full bg-blue-100 text-blue-700 text-xs flex items-center justify-center font-bold">5</span>
+              <span>Upload that file below &darr;</span>
+            </li>
+          </ol>
+        </div>
+
         <div className="mt-4">
           <FileUpload onFileSelect={handleFileSelect} />
         </div>
+
+        <p className="mt-3 text-xs text-slate-400 text-center">
+          Still waiting for the email? You can close this and come back later —
+          or go Back to choose &ldquo;Read from your ChatGPT account&rdquo; instead.
+        </p>
       </div>
     );
   }
 
   if (phase === "error") {
+    // Show a friendlier error message for common issues
+    let friendlyError = error;
+    if (error?.includes("No ChatGPT tab found")) {
+      friendlyError =
+        "We couldn't find ChatGPT open in any of your tabs. Please open chatgpt.com in another tab, make sure you're logged in, then try again.";
+    } else if (error?.includes("No file selected")) {
+      friendlyError = "No file was selected. Please try again.";
+    }
+
     return (
       <div className="flex flex-1 flex-col">
         <h2 className="text-lg font-semibold text-gray-900">
-          Extraction Failed
+          Something went wrong
         </h2>
         <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-4">
-          <p className="text-sm text-red-700">{error}</p>
+          <p className="text-sm text-red-700">{friendlyError}</p>
         </div>
         <div className="mt-4">
           <ProgressTracker steps={steps} startedAt={startedAt} />
@@ -498,7 +720,7 @@ export default function Extract(): React.JSX.Element {
           onClick={handleRetry}
           className="mt-4 w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
         >
-          Retry
+          Try Again
         </button>
       </div>
     );
@@ -523,10 +745,10 @@ export default function Extract(): React.JSX.Element {
           </svg>
         </div>
         <h2 className="mt-4 text-lg font-semibold text-gray-900">
-          Extraction Complete
+          All done!
         </h2>
         <p className="mt-1 text-sm text-gray-500">
-          Proceeding to review...
+          Moving on to review your data...
         </p>
       </div>
     );
@@ -535,9 +757,9 @@ export default function Extract(): React.JSX.Element {
   // Running
   return (
     <div className="flex flex-1 flex-col">
-      <h2 className="text-lg font-semibold text-gray-900">Extracting Data</h2>
+      <h2 className="text-lg font-semibold text-gray-900">Reading your ChatGPT data</h2>
       <p className="mt-1 text-sm text-gray-500">
-        Please keep this panel open while extraction is in progress.
+        Please keep this panel open — this will only take a moment.
       </p>
       <div className="mt-4">
         <ProgressTracker steps={steps} startedAt={startedAt} />

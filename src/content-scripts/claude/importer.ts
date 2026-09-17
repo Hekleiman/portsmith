@@ -3,6 +3,7 @@ import type { SelectorStrategy } from "@/content-scripts/common/selector-engine"
 import { SELECTOR_MAP } from "./selectors";
 import {
   onMessage,
+  sendMessage,
   initMessageRouter,
   type AutofillAction,
 } from "@/shared/messaging";
@@ -61,9 +62,59 @@ async function executeAction(
 
   try {
     switch (action) {
-      case "click":
-        clickElement(result.element);
+      case "click": {
+        // Try MAIN world click first — Claude uses Radix UI which ignores
+        // synthetic events dispatched from the content script's isolated world.
+        const el = result.element as HTMLElement;
+        const tagName = el.tagName.toLowerCase();
+
+        // Prefer the nearest interactive element (button/a) so the MAIN world
+        // handler clicks the React event target, not an inner text wrapper.
+        const interactiveParent = el.closest(
+          "button, a, [role='button']",
+        ) as HTMLElement | null;
+        const interactiveChild = el.querySelector(
+          "button, a, [role='button']",
+        ) as HTMLElement | null;
+
+        let clickEl: HTMLElement;
+        if (
+          tagName === "button" ||
+          tagName === "a" ||
+          el.getAttribute("role") === "button"
+        ) {
+          clickEl = el;
+        } else if (interactiveParent) {
+          clickEl = interactiveParent;
+        } else if (interactiveChild) {
+          clickEl = interactiveChild;
+        } else {
+          clickEl = el;
+        }
+
+        const clickTag = clickEl.tagName.toLowerCase();
+        const clickText = clickEl.textContent?.trim();
+
+        if (clickText) {
+          try {
+            const mainWorldResult = await sendMessage("CLICK_IN_MAIN_WORLD", {
+              selector: clickTag,
+              text: clickText,
+            });
+            if (mainWorldResult === true) {
+              console.log(
+                `[PortSmith] MAIN world click succeeded for: ${clickTag} "${clickText}"`,
+              );
+              return { success: true };
+            }
+          } catch {
+            // Fall through to isolated world click
+          }
+        }
+        // Fallback: isolated world click
+        clickElement(clickEl);
         break;
+      }
       case "fill":
         fillElement(result.element, value ?? "", false);
         break;
@@ -83,6 +134,23 @@ async function executeAction(
 // ─── Message Handler ────────────────────────────────────────
 
 onMessage("AUTOFILL_EXECUTE", (payload) => {
+  // Dismiss popover doesn't need selector resolution
+  if (payload.action === "dismiss_popover") {
+    const activeEl = document.activeElement;
+    if (activeEl && activeEl instanceof HTMLElement) {
+      console.log(`[PortSmith] Blurring active element: ${activeEl.tagName}`);
+      activeEl.blur();
+    }
+    // Dispatch Escape to dismiss any Radix popovers/dropdowns
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }),
+    );
+    document.dispatchEvent(
+      new KeyboardEvent("keyup", { key: "Escape", code: "Escape", bubbles: true }),
+    );
+    return Promise.resolve({ success: true });
+  }
+
   const strategies =
     SELECTOR_MAP[payload.target as keyof typeof SELECTOR_MAP] as
       | SelectorStrategy[]
@@ -391,6 +459,202 @@ onMessage("FILL_PROJECT_INSTRUCTIONS", async (payload) => {
       success: false,
       error: err instanceof Error ? err.message : String(err),
     };
+  }
+});
+
+// ─── Claude API Handlers ────────────────────────────────────
+// Same-origin fetch — cookies are included automatically because
+// the content script runs on claude.ai. No MAIN world needed.
+
+function getOrgId(): string | null {
+  const match = document.cookie.match(/lastActiveOrg=([^;]+)/);
+  return match?.[1] ?? null;
+}
+
+onMessage("CLAUDE_CREATE_PROJECT", async (payload) => {
+  const orgId = getOrgId();
+  if (!orgId) {
+    console.error("[PortSmith] CLAUDE_CREATE_PROJECT: no org ID in cookies");
+    return { success: false, error: "Not logged in to Claude" };
+  }
+
+  console.log("[PortSmith] Creating project via API:", payload.name, "org:", orgId);
+
+  try {
+    const resp = await fetch(
+      `/api/organizations/${orgId}/projects`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: payload.name,
+          description: payload.description,
+          is_private: true,
+        }),
+      },
+    );
+
+    console.log("[PortSmith] Create project response:", resp.status);
+
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      console.error("[PortSmith] Create project failed:", resp.status, text.substring(0, 200));
+      return { success: false, error: `HTTP ${resp.status}: ${text.substring(0, 200)}` };
+    }
+
+    const data = (await resp.json()) as { uuid: string };
+    console.log("[PortSmith] Project created:", data.uuid);
+    return { success: true, uuid: data.uuid };
+  } catch (e) {
+    console.error("[PortSmith] Create project fetch error:", e);
+    return { success: false, error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
+onMessage("CLAUDE_SET_INSTRUCTIONS", async (payload) => {
+  const orgId = getOrgId();
+  if (!orgId) {
+    console.error("[PortSmith] CLAUDE_SET_INSTRUCTIONS: no org ID in cookies");
+    return { success: false, error: "Not logged in to Claude" };
+  }
+
+  console.log("[PortSmith] Setting instructions for project:", payload.projectUuid, `(${payload.instructions.length} chars)`);
+
+  try {
+    const resp = await fetch(
+      `/api/organizations/${orgId}/projects/${payload.projectUuid}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt_template: payload.instructions }),
+      },
+    );
+
+    console.log("[PortSmith] Set instructions response:", resp.status);
+
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      console.error("[PortSmith] Set instructions failed:", resp.status, text.substring(0, 200));
+      return { success: false, error: `HTTP ${resp.status}: ${text.substring(0, 200)}` };
+    }
+
+    console.log("[PortSmith] Instructions set successfully");
+    return { success: true };
+  } catch (e) {
+    console.error("[PortSmith] Set instructions fetch error:", e);
+    return { success: false, error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
+// ─── Verify / Upload / List Files Handlers ─────────────────
+
+onMessage("CLAUDE_VERIFY_PROJECT", async (payload) => {
+  const orgId = getOrgId();
+  if (!orgId) return { success: false, error: "Not logged in to Claude" };
+
+  console.log("[PortSmith] Verifying project:", payload.projectUuid);
+
+  try {
+    const resp = await fetch(
+      `/api/organizations/${orgId}/projects/${payload.projectUuid}`,
+    );
+
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      return { success: false, error: `HTTP ${resp.status}: ${text.substring(0, 200)}` };
+    }
+
+    const data = (await resp.json()) as {
+      name?: string;
+      prompt_template?: string;
+      files_count?: number;
+    };
+    console.log("[PortSmith] Verify result: name =", data.name, "instructions =", !!data.prompt_template?.trim(), "files =", data.files_count);
+    return {
+      success: true,
+      name: data.name,
+      hasInstructions: !!data.prompt_template?.trim(),
+      instructionsLength: data.prompt_template?.length ?? 0,
+      filesCount: data.files_count ?? 0,
+    };
+  } catch (e) {
+    console.error("[PortSmith] Verify project error:", e);
+    return { success: false, error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
+onMessage("CLAUDE_UPLOAD_FILE", async (payload) => {
+  const orgId = getOrgId();
+  if (!orgId) return { success: false, error: "Not logged in to Claude" };
+
+  try {
+    const binaryStr = atob(payload.fileBlob);
+    const bytes = new Uint8Array(binaryStr.length);
+    for (let i = 0; i < binaryStr.length; i++) {
+      bytes[i] = binaryStr.charCodeAt(i);
+    }
+    const blob = new Blob([bytes], { type: payload.mimeType });
+
+    const formData = new FormData();
+    formData.append("file", blob, payload.fileName);
+
+    console.log("[PortSmith] Uploading file:", payload.fileName, `(${bytes.length} bytes)`);
+
+    const resp = await fetch(
+      `/api/organizations/${orgId}/projects/${payload.projectUuid}/docs`,
+      {
+        method: "POST",
+        body: formData,
+      },
+    );
+
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      console.error("[PortSmith] File upload failed:", resp.status, text.substring(0, 200));
+      return { success: false, error: `HTTP ${resp.status}: ${text.substring(0, 200)}` };
+    }
+
+    const data = (await resp.json()) as { file_uuid?: string; uuid?: string };
+    const fileUuid = data.file_uuid ?? data.uuid;
+    console.log("[PortSmith] File uploaded:", fileUuid);
+    return { success: true, fileUuid };
+  } catch (e) {
+    console.error("[PortSmith] File upload error:", e);
+    return { success: false, error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
+onMessage("CLAUDE_LIST_FILES", async (payload) => {
+  const orgId = getOrgId();
+  if (!orgId) return { success: false, error: "Not logged in to Claude" };
+
+  try {
+    const resp = await fetch(
+      `/api/organizations/${orgId}/projects/${payload.projectUuid}/docs`,
+    );
+
+    if (!resp.ok) {
+      return { success: false, error: `HTTP ${resp.status}` };
+    }
+
+    const data = (await resp.json()) as Array<{
+      file_uuid?: string;
+      uuid?: string;
+      file_name?: string;
+      file_kind?: string;
+      size_bytes?: number | null;
+    }>;
+    return {
+      success: true,
+      files: (data ?? []).map((f) => ({
+        uuid: f.file_uuid ?? f.uuid ?? "",
+        name: f.file_name ?? "",
+        kind: f.file_kind ?? "",
+        sizeBytes: f.size_bytes ?? null,
+      })),
+    };
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : String(e) };
   }
 });
 

@@ -2,6 +2,7 @@ import { APP_NAME, APP_VERSION } from "@/shared/constants";
 import { initMessageRouter, onMessage } from "@/shared/messaging";
 import { registerOrchestratorHandlers } from "./migration-orchestrator";
 import { verifyProjects } from "@/core/adapters/claude-verifier";
+import { saveFile } from "@/core/storage/indexed-db";
 
 console.log(`${APP_NAME} service worker started (v${APP_VERSION})`);
 
@@ -47,8 +48,6 @@ async function getChatGPTAccessToken(tabId: number): Promise<string | null> {
     return cached.token;
   }
 
-  console.log("[PortSmith] DIAG-AUTH-1: Fetching access token from /api/auth/session");
-
   const [result] = await chrome.scripting.executeScript({
     target: { tabId },
     world: "MAIN",
@@ -67,10 +66,7 @@ async function getChatGPTAccessToken(tabId: number): Promise<string | null> {
 
   const token = result?.result as string | null;
   if (token) {
-    console.log(`[PortSmith] DIAG-AUTH-2: Token obtained (${token.substring(0, 8)}...)`);
     accessTokenCache.set(tabId, { token, ts: Date.now() });
-  } else {
-    console.log("[PortSmith] DIAG-AUTH-2: Failed to obtain access token");
   }
 
   return token;
@@ -109,6 +105,22 @@ onMessage("FETCH_GIZMO_API", async (payload, sender) => {
   return result?.result ?? { error: "executeScript failed" };
 });
 
+// ─── File Storage (from content script) ─────────────────────
+// Content script downloads file blobs directly (same-origin fetch),
+// then sends the base64 blob here for IndexedDB storage.
+
+onMessage("STORE_DOWNLOADED_FILE", async (payload) => {
+  try {
+    const contentRef = `file-${payload.fileId}`;
+    await saveFile(contentRef, payload.blob, payload.mimeType, payload.fileName);
+    console.log("[PortSmith] Stored file in IndexedDB:", contentRef, payload.fileName);
+    return { success: true, contentRef };
+  } catch (e: unknown) {
+    console.error("[PortSmith] Failed to store file:", e);
+    return { success: false, error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
 // ─── Main-World Click Execution ─────────────────────────────
 // Content scripts run in an ISOLATED world — synthetic events they dispatch
 // are untrusted and Radix UI ignores them. This handler uses
@@ -122,18 +134,82 @@ onMessage("CLICK_IN_MAIN_WORLD", async (payload, sender) => {
   const [result] = await chrome.scripting.executeScript({
     target: { tabId },
     world: "MAIN",
-    func: (selector: string) => {
-      const el = document.querySelector(selector) as HTMLElement | null;
-      if (!el) return false;
+    func: async (selector: string, text?: string) => {
+      // ── Find the target element ──────────────────────────
+      let el: HTMLElement | null = null;
+      if (text) {
+        const candidates = document.querySelectorAll(selector);
+        for (const c of candidates) {
+          if (
+            c instanceof HTMLElement &&
+            c.textContent?.trim().toLowerCase() === text.toLowerCase()
+          ) {
+            el = c;
+            break;
+          }
+        }
+      } else {
+        el = document.querySelector(selector) as HTMLElement | null;
+      }
+
+      if (!el) {
+        return false;
+      }
+
+      // ── Traverse to nearest interactive element ───────────
+      const interactiveTags = new Set(["button", "a", "input", "select", "textarea"]);
+      const isInteractive =
+        interactiveTags.has(el.tagName.toLowerCase()) ||
+        el.getAttribute("role") === "button" ||
+        el.getAttribute("tabindex") !== null;
+
+      if (!isInteractive) {
+        const parent = el.closest(
+          "button, a, [role='button'], [tabindex]",
+        ) as HTMLElement | null;
+        if (parent) {
+          el = parent;
+        } else {
+          const child = el.querySelector(
+            "button, a, [role='button']",
+          ) as HTMLElement | null;
+          if (child) {
+            el = child;
+          }
+        }
+      }
+
+      // ── Dismiss any active popover/dropdown ──────────────
+      const focused = document.activeElement;
+      if (focused && focused instanceof HTMLElement && focused !== el) {
+        focused.blur();
+        await new Promise((r) => setTimeout(r, 150));
+      }
+
+      // ── Compute click coordinates ─────────────────────────
       const rect = el.getBoundingClientRect();
-      const x = rect.left + rect.width / 2;
-      const y = rect.top + rect.height / 2;
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+
+      // ── Strategy 1: native .click() ──────────────────────
+      el.click();
+
+      // ── Strategy 2: form.requestSubmit() for form buttons ─
+      if (el instanceof HTMLButtonElement && el.form) {
+        try {
+          el.form.requestSubmit(el);
+        } catch {
+          // Not all forms support requestSubmit
+        }
+      }
+
+      // ── Strategy 3: dispatch full event sequence ──────────
       const opts = {
         bubbles: true,
         cancelable: true,
         view: window,
-        clientX: x,
-        clientY: y,
+        clientX: cx,
+        clientY: cy,
         pointerId: 1,
         pointerType: "mouse" as const,
       };
@@ -143,9 +219,10 @@ onMessage("CLICK_IN_MAIN_WORLD", async (payload, sender) => {
       el.dispatchEvent(new MouseEvent("mouseup", opts));
       el.dispatchEvent(new PointerEvent("click", opts));
       el.dispatchEvent(new MouseEvent("click", opts));
+
       return true;
     },
-    args: [payload.selector],
+    args: [payload.selector, payload.text],
   });
 
   return result?.result ?? false;

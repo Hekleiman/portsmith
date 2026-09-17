@@ -12,7 +12,8 @@ export interface ManifestRecord {
 
 export interface FileRecord {
   id: string;
-  blob: Blob;
+  /** Base64-encoded file content. String (not Blob) for message serialization. */
+  blob: string;
   mimeType: string;
   originalName: string;
 }
@@ -118,7 +119,7 @@ export async function clearManifest(id: string): Promise<void> {
 
 export async function saveFile(
   id: string,
-  blob: Blob,
+  blob: string,
   mimeType: string,
   originalName: string,
 ): Promise<void> {

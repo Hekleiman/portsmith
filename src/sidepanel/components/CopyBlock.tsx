@@ -42,28 +42,37 @@ export default function CopyBlock({
         >
           {expanded ? `Hide ${label} \u25BE` : `Preview ${label} \u25B8`}
         </button>
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] text-gray-400">
-            {content.length.toLocaleString()} chars
-          </span>
-          <button
-            type="button"
-            onClick={() => void handleCopy()}
-            className={`rounded px-2 py-0.5 text-[11px] font-medium transition-colors ${
-              copied
-                ? "bg-green-100 text-green-700"
-                : "bg-blue-100 text-blue-700 hover:bg-blue-200"
-            }`}
-          >
-            {copied ? "Copied \u2713" : "Copy"}
-          </button>
-        </div>
+        <span className="text-[10px] text-gray-400">
+          {content.length.toLocaleString()} chars
+        </span>
       </div>
       {expanded && (
         <pre className="max-h-[200px] overflow-y-auto border-t border-gray-200 whitespace-pre-wrap break-words px-3 py-2 font-mono text-xs text-gray-700">
           {content}
         </pre>
       )}
+      <button
+        type="button"
+        onClick={() => void handleCopy()}
+        className={`flex w-full items-center justify-center gap-2 rounded-b-md px-3 py-2 text-sm font-medium transition-colors ${
+          copied
+            ? "bg-green-100 text-green-700"
+            : "bg-blue-50 text-blue-700 hover:bg-blue-100"
+        }`}
+      >
+        {copied ? (
+          "\u2713 Copied to clipboard"
+        ) : (
+          <>
+            Copy {label}
+            {content.length > 100 && (
+              <span className="font-normal text-blue-400">
+                ({content.length.toLocaleString()} chars)
+              </span>
+            )}
+          </>
+        )}
+      </button>
     </div>
   );
 }

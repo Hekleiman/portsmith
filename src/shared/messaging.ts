@@ -3,6 +3,9 @@ import type {
   DOMExtractionResult,
   ProjectExtractionResult,
 } from "@/core/adapters/chatgpt-dom-types";
+import type { ClaudeExtractionResult } from "@/core/adapters/claude-dom-types";
+import type { GemExtractionResult } from "@/core/adapters/gemini-dom-types";
+import type { GemConfig, GemImportResult } from "@/core/adapters/gemini-import-types";
 
 // ─── Placeholder Types (move to dedicated modules when implemented) ──
 
@@ -20,7 +23,7 @@ export interface MigrationState {
   error: string | null;
 }
 
-export type AutofillAction = "click" | "fill" | "clear_and_fill";
+export type AutofillAction = "click" | "fill" | "clear_and_fill" | "dismiss_popover";
 
 export interface AutofillExecuteRequest {
   action: AutofillAction;
@@ -69,7 +72,7 @@ export interface GizmoAPIResponse {
     };
     memory_enabled: boolean;
   };
-  files?: Array<{ name: string; type: string; size: number }>;
+  files?: Array<{ id?: string; name: string; type: string; size: number }>;
   error?: string;
 }
 
@@ -106,6 +109,8 @@ export interface MigrationStepFallback {
   copyBlocks: Array<{ label: string; content: string }>;
   fileNames?: string[];
   link?: string;
+  actionHint?: string;
+  stepNumber?: number;
 }
 
 export type InstructionsDelivery =
@@ -122,12 +127,15 @@ export interface MigrationStep {
   fallback?: MigrationStepFallback;
   /** Set on instructions-related steps to track delivery method */
   instructionsDelivery?: InstructionsDelivery;
+  /** Set on verify steps to indicate API verification passed */
+  verified?: boolean;
 }
 
 export interface MigrationGuidedInstructions {
   workspaceId: string;
   workspaceName: string;
   steps: MigrationStepFallback[];
+  totalSteps?: number;
 }
 
 export interface OrchestratorStatus {
@@ -149,6 +157,10 @@ export interface OrchestratorStatus {
   currentWorkspaceInstructions: string | null;
   /** Per-workspace instructions text for workspaces that fell back to clipboard */
   clipboardInstructions: Record<string, string>;
+  /** Workspace IDs that passed API verification during autofill */
+  verifiedWorkspaceIds: string[];
+  /** Warning when multiple Claude tabs are detected */
+  duplicateTabWarning?: string;
 }
 
 // ─── Message Map ─────────────────────────────────────────────
@@ -207,6 +219,7 @@ export interface MessageMap {
       manifestId: string;
       mode: "autofill" | "guided" | "hybrid";
       workspaceIds: string[];
+      targetPlatform?: string;
     };
     response: { success: boolean };
   };
@@ -267,7 +280,7 @@ export interface MessageMap {
     response: { success: boolean; saved?: boolean; error?: string };
   };
   CLICK_IN_MAIN_WORLD: {
-    request: { selector: string };
+    request: { selector: string; text?: string };
     response: boolean;
   };
   FETCH_GIZMO_API: {
@@ -278,6 +291,72 @@ export interface MessageMap {
   PING: {
     request: void;
     response: { pong: true };
+  };
+  /** Create a Claude project via internal API */
+  CLAUDE_CREATE_PROJECT: {
+    request: { name: string; description: string };
+    response: { success: boolean; uuid?: string; error?: string };
+  };
+  /** Set instructions on a Claude project via internal API */
+  CLAUDE_SET_INSTRUCTIONS: {
+    request: { projectUuid: string; instructions: string };
+    response: { success: boolean; error?: string };
+  };
+  /** Verify a Claude project exists and has correct data */
+  CLAUDE_VERIFY_PROJECT: {
+    request: { projectUuid: string };
+    response: {
+      success: boolean;
+      name?: string;
+      hasInstructions?: boolean;
+      instructionsLength?: number;
+      filesCount?: number;
+      error?: string;
+    };
+  };
+  /** Upload a file to a Claude project (base64-encoded blob) */
+  CLAUDE_UPLOAD_FILE: {
+    request: { projectUuid: string; fileName: string; fileBlob: string; mimeType: string };
+    response: { success: boolean; fileUuid?: string; error?: string };
+  };
+  /** Extract Projects from the user's Claude account via internal API */
+  CLAUDE_EXTRACT_PROJECTS: {
+    request: void;
+    response: ClaudeExtractionResult;
+  };
+  /** Extract Gems from the user's Gemini account via batchexecute API */
+  GEMINI_EXTRACT_GEMS: {
+    request: void;
+    response: GemExtractionResult;
+  };
+  /** Create a new Gem in the user's Gemini account */
+  GEMINI_CREATE_GEM: {
+    request: GemConfig;
+    response: GemImportResult;
+  };
+  /** Update an existing Gem (all fields required by Gemini API) */
+  GEMINI_UPDATE_GEM: {
+    request: GemConfig & { gemId: string };
+    response: GemImportResult;
+  };
+  /** Delete a Gem by ID */
+  GEMINI_DELETE_GEM: {
+    request: { gemId: string };
+    response: GemImportResult;
+  };
+  /** Store a downloaded file blob in IndexedDB (sent from content script) */
+  STORE_DOWNLOADED_FILE: {
+    request: { fileId: string; blob: string; mimeType: string; fileName: string };
+    response: { success: boolean; contentRef?: string; error?: string };
+  };
+  /** List files in a Claude project */
+  CLAUDE_LIST_FILES: {
+    request: { projectUuid: string };
+    response: {
+      success: boolean;
+      files?: Array<{ uuid: string; name: string; kind: string; sizeBytes: number | null }>;
+      error?: string;
+    };
   };
 }
 
@@ -317,6 +396,12 @@ function isResponseEnvelope(value: unknown): value is ResponseEnvelope {
 // ─── Constants ───────────────────────────────────────────────
 
 export const MESSAGE_TIMEOUT_MS = 10_000;
+
+/** Per-message timeout overrides for long-running operations. */
+const MESSAGE_TIMEOUT_OVERRIDES: Partial<Record<MessageName, number>> = {
+  STORE_DOWNLOADED_FILE: 30_000,
+  CLAUDE_UPLOAD_FILE: 60_000,
+};
 
 // ─── Errors ──────────────────────────────────────────────────
 
@@ -406,9 +491,10 @@ export function sendMessage<K extends MessageName>(
     : [MessageMap[K]["request"]]
 ): Promise<MessageMap[K]["response"]> {
   return new Promise<MessageMap[K]["response"]>((resolve, reject) => {
+    const timeoutMs = MESSAGE_TIMEOUT_OVERRIDES[name] ?? MESSAGE_TIMEOUT_MS;
     const timer = setTimeout(() => {
       reject(new MessageTimeoutError(String(name)));
-    }, MESSAGE_TIMEOUT_MS);
+    }, timeoutMs);
 
     const envelope: MessageEnvelope = {
       __portsmith: true,
@@ -451,9 +537,10 @@ export function sendTabMessage<K extends MessageName>(
     : [MessageMap[K]["request"]]
 ): Promise<MessageMap[K]["response"]> {
   return new Promise<MessageMap[K]["response"]>((resolve, reject) => {
+    const timeoutMs = MESSAGE_TIMEOUT_OVERRIDES[name] ?? MESSAGE_TIMEOUT_MS;
     const timer = setTimeout(() => {
       reject(new MessageTimeoutError(String(name)));
-    }, MESSAGE_TIMEOUT_MS);
+    }, timeoutMs);
 
     const envelope: MessageEnvelope = {
       __portsmith: true,
