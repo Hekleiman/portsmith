@@ -704,7 +704,9 @@ export class MigrationOrchestrator {
     };
 
     const reasons = new Map<string, number>();
-    const CHUNK = 30;
+    // Small batches so the count on screen moves every few seconds rather
+    // than once per 30 saves (a run of 234 takes about 13 minutes).
+    const CHUNK = 5;
     for (let i = 0; tabId !== null && i < todo.length; i += CHUNK) {
       const chunk = todo.slice(i, i + CHUNK);
       try {

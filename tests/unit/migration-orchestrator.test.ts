@@ -855,7 +855,7 @@ describe("MigrationOrchestrator: Gemini memories", () => {
     await finishGeminiRun(o);
 
     const calls = h.tabMessages.filter((m) => m.name === "GEMINI_SAVE_MEMORIES");
-    expect(calls.map((c) => (c.payload as { texts: string[] }).texts.length)).toEqual([13]);
+    expect(calls.map((c) => (c.payload as { texts: string[] }).texts.length)).toEqual([5, 5, 3]);
     expect((calls[0]!.payload as { texts: string[] }).texts.slice(0, 2)).toEqual([
       "Be brief.",
       "Fact number 0",
