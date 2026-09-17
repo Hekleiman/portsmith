@@ -215,6 +215,8 @@ export interface OrchestratorStatus {
   projectMemoryWorkspaceIds: string[];
   /** Knowledge to add by hand after the run, per workspace */
   knowledgeLeftovers: Record<string, KnowledgeLeftover>;
+  /** Memories PortSmith saved to the target by itself (null: it didn't try) */
+  memoryAutoSaved: { saved: number; total: number } | null;
   /** Whether the user finished the memory steps (null: there were none yet) */
   memoryImported: boolean | null;
   /** Warning when multiple Claude tabs are detected */
@@ -427,6 +429,13 @@ export interface MessageMap {
     request: { fileName: string; mimeType: string; base64: string };
     response: { success: boolean; handle?: string; error?: string };
   };
+  /** Add entries to "Your instructions for Gemini" (one per text) */
+  GEMINI_SAVE_MEMORIES: {
+    request: { texts: string[] };
+    response: {
+      results: Array<{ text: string; success: boolean; id?: string; error?: string }>;
+    };
+  };
   /** Delete a Gem by ID */
   GEMINI_DELETE_GEM: {
     request: { gemId: string };
@@ -506,6 +515,8 @@ const MESSAGE_TIMEOUT_OVERRIDES: Partial<Record<MessageName, number>> = {
   GEMINI_CREATE_GEM: 60_000,
   GEMINI_UPDATE_GEM: 60_000,
   GEMINI_UPLOAD_KNOWLEDGE_FILE: 180_000,
+  // Up to 10 entries per message, each can take several seconds
+  GEMINI_SAVE_MEMORIES: 180_000,
   FETCH_GIZMO_API: 30_000,
 };
 

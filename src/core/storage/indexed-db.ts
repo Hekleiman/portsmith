@@ -62,6 +62,8 @@ export interface MigrationStateSnapshot {
     string,
     { link: string; fileNames: string[]; projectMemory: boolean }
   >;
+  /** Memory items (and "custom-instructions") already saved to the target */
+  savedMemoryIds?: string[];
   /** Whether the user finished the memory import steps */
   memoryImported?: boolean;
 }

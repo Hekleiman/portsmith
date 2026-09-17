@@ -7,6 +7,12 @@ import {
 } from "@/content-scripts/gemini/knowledge";
 import { buildGemKnowledgeStep, geminiGemEditUrl } from "@/core/adapters/gemini-guided";
 import { buildLeftoverCards } from "@/core/adapters/leftover-cards";
+import { decodeResponse, encodeRequest } from "@/content-scripts/gemini/batchexecute";
+import {
+  createSavedInfoRequest,
+  parseCreateSavedInfoResponse,
+  savedInfoKey,
+} from "@/content-scripts/gemini/saved-info";
 
 function ws(overrides: Partial<Workspace> = {}): Workspace {
   return {
@@ -143,5 +149,34 @@ describe("buildLeftoverCards", () => {
         "Claude",
       ),
     ).toEqual([]);
+  });
+});
+
+describe("Gemini saved info (recorded Sep 2026)", () => {
+  it("builds the Add request like the saved-info page", () => {
+    expect(encodeRequest([createSavedInfoRequest("i prefer short concise responses")])).toBe(
+      String.raw`[[["xVRQX","[[null,\"i prefer short concise responses\"]]",null,"generic"]]]`,
+    );
+  });
+
+  it("reads the saved entry from the reply", () => {
+    const reply = String.raw`)]}'
+
+294
+[["wrb.fr","xVRQX","[null,null,null,[[[\"00065bb016e6aa7402ef18f66e168e2dea703354c7771a69\",\"I prefer short concise responses.\",[1789661716,849666000],null,[1789661716,849666000],null,null,null,null,2,1]]]]",null,null,null,"generic"],["di",4051],["af.httprm",4051,"-8797503184941870592",9]]
+25
+[["e",4,null,null,330]]
+`;
+    expect(parseCreateSavedInfoResponse(decodeResponse(reply))).toEqual({
+      id: "00065bb016e6aa7402ef18f66e168e2dea703354c7771a69",
+      text: "I prefer short concise responses.",
+    });
+    expect(parseCreateSavedInfoResponse(decodeResponse(")]}'\n\n25\n[[\"e\",4,null,null,330]]\n"))).toBeNull();
+  });
+
+  it("compares entries the way Gemini rewrites them", () => {
+    expect(savedInfoKey("i prefer short concise responses")).toBe(
+      savedInfoKey("I prefer short concise responses."),
+    );
   });
 });

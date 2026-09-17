@@ -17,6 +17,7 @@ import {
 } from "@/core/adapters/gemini-guided";
 import { generateChatGPTInstructions } from "@/core/adapters/chatgpt-guided";
 import { buildMemoryStepsForTarget } from "@/core/adapters/memory-steps";
+import { generateGeminiMemoryInstructions } from "@/core/adapters/gemini-guided";
 import { buildManualCreateFallback, handOverNote } from "@/core/adapters/manual-fallback";
 import {
   hasProjectMemory,
@@ -96,6 +97,9 @@ export class MigrationOrchestrator {
   private projectMemoryWorkspaceIds: string[] = [];
   private knowledgeLeftovers: Record<string, KnowledgeLeftover> = {};
   private memoryImported: boolean | null = null;
+  /** Memory items saved to the target by PortSmith ("custom-instructions" for those) */
+  private savedMemoryIds: string[] = [];
+  private memoryAutoSaved: { saved: number; total: number } | null = null;
   private migrationTabId: number | null = null;
   /** Google account path of the pinned Gemini tab, e.g. "/u/1/" */
   private geminiAccount: string | null = null;
@@ -205,6 +209,7 @@ export class MigrationOrchestrator {
       this.projectMemoryWorkspaceIds = [...(snap.projectMemoryWorkspaceIds ?? [])];
       this.knowledgeLeftovers = { ...(snap.knowledgeLeftovers ?? {}) };
       this.memoryImported = snap.memoryImported ?? null;
+      this.savedMemoryIds = [...(snap.savedMemoryIds ?? [])];
       this.currentWorkspaceIndex = Math.max(
         0,
         Math.min(ckpt.workspaceIndex, this.workspaceIds.length),
@@ -285,6 +290,7 @@ export class MigrationOrchestrator {
       projectMemoryWorkspaceIds: [...this.projectMemoryWorkspaceIds],
       knowledgeLeftovers: { ...this.knowledgeLeftovers },
       memoryImported: this.memoryImported,
+      memoryAutoSaved: this.memoryAutoSaved,
       duplicateTabWarning: this.duplicateTabWarning ?? undefined,
     };
   }
@@ -556,8 +562,91 @@ export class MigrationOrchestrator {
     }
 
     if (!this.isCurrent(run)) return;
+    if (this.targetPlatform === "gemini" && this.mode !== "guided") {
+      await this.saveGeminiMemories(run);
+      if (!this.isCurrent(run)) return;
+    }
     this.phase = this.memorySteps.length > 0 ? "memory" : "complete";
     await this.checkpointState(run);
+  }
+
+  /**
+   * Save memories and custom instructions to "Your instructions for
+   * Gemini". Only what Gemini doesn't accept is left for copy and paste.
+   */
+  private async saveGeminiMemories(run: number): Promise<void> {
+    const manifest = this.manifest;
+    if (!manifest) return;
+    const custom = manifest.globalInstructions.trim();
+    const wanted = [
+      ...(custom ? [{ id: "custom-instructions", text: custom }] : []),
+      ...manifest.memory.map((m) => ({ id: m.id, text: m.fact.replace(/\s+/g, " ").trim() })),
+    ].filter((w) => w.text.length > 0);
+    if (wanted.length === 0) return;
+
+    const done = new Set(this.savedMemoryIds);
+    const todo = wanted.filter((w) => !done.has(w.id));
+    const stepId = "memory-save";
+    const progress = (): void => {
+      this.currentSteps = [
+        {
+          id: stepId,
+          title: `Saving your memories to Gemini (${done.size} of ${wanted.length})`,
+          status: "running",
+        },
+      ];
+    };
+    progress();
+
+    const tabId = todo.length > 0 ? await this.getGeminiTab() : null;
+    if (!this.isCurrent(run)) return;
+
+    const CHUNK = 10;
+    for (let i = 0; tabId !== null && i < todo.length; i += CHUNK) {
+      const chunk = todo.slice(i, i + CHUNK);
+      try {
+        const { results } = await safeSendTabMessage(tabId, "GEMINI_SAVE_MEMORIES", {
+          texts: chunk.map((c) => c.text),
+        });
+        if (!this.isCurrent(run)) return;
+        results.forEach((r, j) => {
+          const item = chunk[j];
+          if (r.success && item) done.add(item.id);
+          else if (item) console.warn(`[PortSmith] Memory not saved: ${r.error ?? "unknown error"}`);
+        });
+      } catch (err) {
+        if (!this.isCurrent(run)) return;
+        console.warn(`[PortSmith] Saving memories failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      this.savedMemoryIds = [...done];
+      progress();
+      await this.checkpointState(run);
+      if (!this.isCurrent(run)) return;
+    }
+
+    const saved = wanted.filter((w) => done.has(w.id)).length;
+    this.memoryAutoSaved = { saved, total: wanted.length };
+    this.currentSteps = [
+      {
+        id: stepId,
+        title:
+          saved === wanted.length
+            ? `Saved ${saved} memor${saved === 1 ? "y" : "ies"} to Gemini`
+            : `Saved ${saved} of ${wanted.length} memories to Gemini`,
+        status: saved === wanted.length ? "success" : "fallback",
+      },
+    ];
+
+    // Only the leftovers go to the copy-and-paste steps.
+    const leftItems = manifest.memory.filter((m) => !done.has(m.id));
+    const leftCustom = custom && !done.has("custom-instructions") ? custom : "";
+    this.memorySteps = generateGeminiMemoryInstructions(
+      leftItems,
+      this.sourceLabel(),
+      leftCustom,
+      manifest.source.platform,
+    );
+    if (saved === wanted.length) this.memoryImported = true;
   }
 
   /** Suspend until the user answers the pending step. */
@@ -1157,6 +1246,7 @@ export class MigrationOrchestrator {
       projectMemoryWorkspaceIds: [...this.projectMemoryWorkspaceIds],
       knowledgeLeftovers: { ...this.knowledgeLeftovers },
       ...(this.memoryImported !== null ? { memoryImported: this.memoryImported } : {}),
+      ...(this.savedMemoryIds.length > 0 ? { savedMemoryIds: [...this.savedMemoryIds] } : {}),
     };
 
     try {
@@ -1191,6 +1281,8 @@ export class MigrationOrchestrator {
     this.filesDelivered = {};
     this.projectMemoryWorkspaceIds = [];
     this.knowledgeLeftovers = {};
+    this.savedMemoryIds = [];
+    this.memoryAutoSaved = null;
     this.memoryImported = null;
     this.pauseRequested = false;
     this.pauseResolver = null;

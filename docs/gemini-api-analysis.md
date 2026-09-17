@@ -172,6 +172,20 @@ After uploading, the editor also calls `ESY5D`; PortSmith doesn't need it.
 
 ---
 
+### 3c-ter. Saved info ("Your instructions for Gemini")
+
+Recorded on `gemini.google.com/saved-info` (Sep 2026). The page loads with `GPRiHf` (returned `[]` even with entries saved), `maGuAc`, `Te6DCf` and `L5adhe`. The "Add" button sends `xVRQX`, one entry per call:
+
+```json
+[["xVRQX", "[[null,\"i prefer short concise responses\"]]", null, "generic"]]
+```
+
+Reply body: `[null,null,null,[[[id,"I prefer short concise responses.",[secs,nanos],null,[secs,nanos],null,null,null,null,2,1]]]]`. Gemini tidies the wording (capitals, final period) before saving. The call takes about four seconds. The page also calls `ESY5D` before and after.
+
+The Gemini-API Python client names `ZKcapf` (list), `gSnMcd` (update), `Ok9j9b` (delete) and `YgU2Cc` (delete all) for memories, but has no payloads for them.
+
+---
+
 ### 3d. Delete Gem
 
 ```json

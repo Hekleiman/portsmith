@@ -25,6 +25,10 @@ import {
   uploadFileBytes,
 } from "./knowledge";
 import { base64ToBytes } from "@/shared/encoding";
+import {
+  createSavedInfoRequest,
+  parseCreateSavedInfoResponse,
+} from "./saved-info";
 
 // ─── RPC Constants ──────────────────────────────────────────
 
@@ -295,6 +299,49 @@ export async function uploadKnowledgeFile(
 }
 
 /**
+ * Save entries to "Your instructions for Gemini", a few at a time.
+ * Each entry is its own request, like the page's "Add" button.
+ */
+export async function saveMemories(
+  texts: string[],
+  concurrency = 3,
+): Promise<Array<{ text: string; success: boolean; id?: string; error?: string }>> {
+  const results: Array<{ text: string; success: boolean; id?: string; error?: string }> =
+    texts.map((text) => ({ text, success: false }));
+  let next = 0;
+
+  // No retry here: a request that failed on the way back may still have
+  // saved the entry, and a second try would add it twice.
+  const saveOne = async (index: number): Promise<void> => {
+    const text = texts[index]!;
+    try {
+      const frames = await executeWithRetry([createSavedInfoRequest(text)]);
+      const entry = parseCreateSavedInfoResponse(frames);
+      results[index] = entry
+        ? { text, success: true, id: entry.id }
+        : { text, success: false, error: "Gemini didn't confirm it was saved" };
+    } catch (err) {
+      results[index] = {
+        text,
+        success: false,
+        error: err instanceof Error ? err.message : "request failed",
+      };
+    }
+  };
+
+  const worker = async (): Promise<void> => {
+    while (next < texts.length) {
+      const index = next++;
+      await saveOne(index);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.max(1, Math.min(concurrency, texts.length)) }, worker),
+  );
+  return results;
+}
+
+/**
  * Delete a custom Gem.
  */
 export async function deleteGem(gemId: string): Promise<GemImportResult> {
@@ -342,6 +389,10 @@ onMessage("GEMINI_UPDATE_GEM", async (req) => {
 
 onMessage("GEMINI_UPLOAD_KNOWLEDGE_FILE", async (req) => {
   return uploadKnowledgeFile(req.fileName, req.mimeType, req.base64);
+});
+
+onMessage("GEMINI_SAVE_MEMORIES", async (req) => {
+  return { results: await saveMemories(req.texts) };
 });
 
 onMessage("GEMINI_DELETE_GEM", async (req) => {

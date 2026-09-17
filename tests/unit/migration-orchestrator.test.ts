@@ -179,6 +179,10 @@ function geminiTab(
       };
     }
     if (name === "GEMINI_CREATE_GEM") return create((payload as { name: string }).name);
+    if (name === "GEMINI_SAVE_MEMORIES") {
+      const texts = (payload as { texts: string[] }).texts;
+      return { results: texts.map((text, i) => ({ text, success: true, id: `mem-${i}` })) };
+    }
     if (name === "GEMINI_UPLOAD_KNOWLEDGE_FILE") {
       return { success: true, handle: `$h-${(payload as { fileName: string }).fileName}` };
     }
@@ -764,6 +768,103 @@ describe("MigrationOrchestrator: Gem knowledge", () => {
     await finishGeminiRun(o);
     expect(h.tabMessages.map((m) => m.name)).not.toContain("GEMINI_UPDATE_GEM");
     expect(h.tabMessages.map((m) => m.name)).not.toContain("GEMINI_UPLOAD_KNOWLEDGE_FILE");
+  });
+});
+
+// ─── Gemini memories ────────────────────────────────────────
+
+function memories(n: number) {
+  return Array.from({ length: n }, (_, i) => ({
+    id: `m${i}`,
+    fact: `Fact  number ${i}`,
+    category: "preference" as const,
+    confidence: 1,
+    source: "explicit" as const,
+    workspaceIds: [],
+    migration: { fitsConstraints: true, priority: 3 },
+  }));
+}
+
+describe("MigrationOrchestrator: Gemini memories", () => {
+  it("saves memories and custom instructions without a paste step", async () => {
+    putManifest("m1", [ws("a")], { memory: memories(12), globalInstructions: "Be brief." });
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "autofill", ["a"], "gemini");
+    await finishGeminiRun(o);
+
+    const calls = h.tabMessages.filter((m) => m.name === "GEMINI_SAVE_MEMORIES");
+    expect(calls.map((c) => (c.payload as { texts: string[] }).texts.length)).toEqual([10, 3]);
+    expect((calls[0]!.payload as { texts: string[] }).texts.slice(0, 2)).toEqual([
+      "Be brief.",
+      "Fact number 0",
+    ]);
+    const status = o.getStatus();
+    expect(status.memoryAutoSaved).toEqual({ saved: 13, total: 13 });
+    expect(status.memoryImported).toBe(true);
+  });
+
+  it("leaves only the memories Gemini refused for copy and paste", async () => {
+    putManifest("m1", [ws("a")], { memory: memories(3) });
+    const base = geminiTab();
+    h.tabResponder = (name, payload) => {
+      if (name !== "GEMINI_SAVE_MEMORIES") return base(name, payload);
+      const texts = (payload as { texts: string[] }).texts;
+      return {
+        results: texts.map((text) =>
+          text.endsWith("1") ? { text, success: false, error: "HTTP 400" } : { text, success: true, id: "x" },
+        ),
+      };
+    };
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "autofill", ["a"], "gemini");
+    await waitFor(() => o.getStatus().phase === "memory", "memory");
+    const status = o.getStatus();
+    expect(status.memoryAutoSaved).toEqual({ saved: 2, total: 3 });
+    expect(status.memoryImported).toBeNull();
+    const paste = status.memorySteps.find((st) => st.id === "memory-paste");
+    expect(paste?.title).toBe("Paste your 1 memory");
+    expect(paste?.copyBlocks[0]?.content).toContain("Fact number 1");
+    expect(paste?.copyBlocks[0]?.content).not.toContain("Fact number 0");
+    expect(h.checkpoints[h.checkpoints.length - 1]!.state.savedMemoryIds).toEqual(["m0", "m2"]);
+  });
+
+  it("doesn't save again what a resumed run already saved", async () => {
+    putManifest("m1", [ws("a")], { memory: memories(3) });
+    h.checkpoints.push({
+      state: {
+        phase: "migrating",
+        sourcePlatform: "chatgpt",
+        targetPlatform: "gemini",
+        extractionMethod: null,
+        deliveryMode: "autofill",
+        manifestId: "m1",
+        selectedWorkspaceIds: ["a"],
+        completedWorkspaceIds: ["a"],
+        createdWorkspaceIds: ["a"],
+        errors: [],
+        savedMemoryIds: ["m0", "m1"],
+      },
+      workspaceIndex: 1,
+    });
+    const o = new MigrationOrchestrator();
+    expect(await o.resume()).toBe(true);
+    await finishGeminiRun(o);
+    const texts = h.tabMessages
+      .filter((m) => m.name === "GEMINI_SAVE_MEMORIES")
+      .flatMap((m) => (m.payload as { texts: string[] }).texts);
+    expect(texts).toEqual(["Fact number 2"]);
+    expect(o.getStatus().memoryAutoSaved).toEqual({ saved: 3, total: 3 });
+  });
+
+  it("keeps the copy-and-paste steps in guided mode", async () => {
+    putManifest("m1", [ws("a")], { memory: memories(2) });
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "guided", ["a"], "gemini");
+    await waitFor(() => o.getStatus().guidedInstructions !== null);
+    o.markWorkspaceDone("a");
+    await waitFor(() => o.getStatus().phase === "memory", "memory");
+    expect(h.tabMessages.some((m) => m.name === "GEMINI_SAVE_MEMORIES")).toBe(false);
+    expect(o.getStatus().memorySteps.map((st) => st.id)).toContain("memory-paste");
   });
 });
 

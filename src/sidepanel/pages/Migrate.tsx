@@ -615,8 +615,9 @@ export default function Migrate(): React.JSX.Element {
                 Bring over your memory
               </h2>
               <p className="mt-1 text-xs text-gray-600">
-                {targetName} doesn&apos;t let extensions add memories directly, so
-                this part is quick copy and paste.
+                {status.memoryAutoSaved
+                  ? `PortSmith saved ${status.memoryAutoSaved.saved} of ${status.memoryAutoSaved.total} to ${targetName}. ${targetName} didn't accept the rest, so add them with a quick copy and paste.`
+                  : `${targetName} takes memories through its own import, so this part is a quick copy and paste.`}
               </p>
             </>
           )}
