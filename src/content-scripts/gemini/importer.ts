@@ -342,6 +342,13 @@ export async function listMemories(): Promise<
 /** Waits between retries of a refused entry. */
 const SAVE_RETRY_DELAYS_MS = [1_000, 3_000];
 
+/**
+ * How many saves are in flight at once. Six produced transient refusals and
+ * replies slowing from ~4 s to ~10 s against a live account, so this is
+ * deliberately low: the call takes about four seconds whatever we do.
+ */
+const SAVE_CONCURRENCY = 2;
+
 const delay = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -361,7 +368,7 @@ const delay = (ms: number): Promise<void> =>
  */
 export async function saveMemories(
   texts: string[],
-  concurrency = 6,
+  concurrency = SAVE_CONCURRENCY,
 ): Promise<Array<{ text: string; success: boolean; id?: string; error?: string }>> {
   const results: Array<{ text: string; success: boolean; id?: string; error?: string }> =
     texts.map((text) => ({ text, success: false }));

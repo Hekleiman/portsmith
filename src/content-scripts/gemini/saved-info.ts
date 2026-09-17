@@ -212,3 +212,71 @@ export function savedInfoKey(text: string): string {
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .trim();
 }
+
+/**
+ * How alike two entries have to be to count as the same memory.
+ *
+ * Measured against 219 real entries (23,871 pairs). True rewrites and
+ * different-but-related memories overlap badly: real rewrites score from 0.67
+ * up, while distinct memories reach 0.83 ("A primary use case for my Claude
+ * Code workflow is trade-up" against "Dartvision is a primary use case for my
+ * Claude Code workflow"). No threshold separates them cleanly.
+ *
+ * So this is set where no false match was observed, not where recall is best.
+ * A missed match re-sends a memory and adds a duplicate, which is visible and
+ * reversible. A false match marks an unsaved memory as saved and loses it
+ * silently. See docs/gemini-saved-info-probe.md for the pairs.
+ */
+export const SAVED_INFO_SIMILARITY_THRESHOLD = 0.9;
+
+/** Words short enough to be grammar rather than content are dropped. */
+const SIMILARITY_MIN_WORD_LENGTH = 4;
+/**
+ * Below this many content words, a partial overlap says too little, so the
+ * sets have to match completely. Two content words sharing one of them is
+ * noise, not a rewrite.
+ */
+const SIMILARITY_MIN_TOKENS = 3;
+
+/**
+ * Content words of an entry, for comparing wording Gemini has rewritten.
+ *
+ * Numbers are kept whatever their length. They are short but highly
+ * distinguishing: dropping them makes "Fact number 0" and "Fact number 1"
+ * identical, and does the same to two dates or two counts.
+ */
+export function savedInfoTokens(text: string): Set<string> {
+  return new Set(
+    savedInfoKey(text)
+      .split(" ")
+      .filter((word) => word.length >= SIMILARITY_MIN_WORD_LENGTH || /^\d+$/.test(word)),
+  );
+}
+
+/**
+ * How much two entries look like the same memory, from 0 to 1.
+ *
+ * Gemini rewrites what it saves ("Goes by Er, also Henry or Erik" is stored as
+ * "I go by both Henry and Erik."), so the stored wording cannot be compared
+ * with `savedInfoKey`. This compares content words instead, as a share of
+ * whichever entry has fewer of them, so a rewrite that drops or adds words
+ * still scores high.
+ *
+ * Entries with fewer than `SIMILARITY_MIN_TOKENS` content words have to match
+ * exactly: with so few words, a partial overlap is as likely to be a different
+ * memory about the same subject.
+ */
+export function savedInfoSimilarity(a: string, b: string): number {
+  const left = savedInfoTokens(a);
+  const right = savedInfoTokens(b);
+  if (left.size === 0 || right.size === 0) return 0;
+
+  let shared = 0;
+  for (const word of left) if (right.has(word)) shared++;
+
+  const smaller = Math.min(left.size, right.size);
+  if (smaller < SIMILARITY_MIN_TOKENS) {
+    return shared === left.size && shared === right.size ? 1 : 0;
+  }
+  return shared / smaller;
+}

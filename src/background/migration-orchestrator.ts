@@ -27,7 +27,9 @@ import {
 import { textToBase64 } from "@/shared/encoding";
 import {
   SAVED_INFO_MAX_LENGTH,
+  SAVED_INFO_SIMILARITY_THRESHOLD,
   savedInfoKey,
+  savedInfoSimilarity,
   splitSavedInfoText,
 } from "@/content-scripts/gemini/saved-info";
 import {
@@ -619,12 +621,18 @@ export class MigrationOrchestrator {
 
     // What earlier runs already saved to this account (Gemini's own list
     // can't be matched by text, since it rewrites the wording).
+    let storedIdCount = 0;
     if (this.manifestId) {
-      for (const id of await loadSavedMemoryIds(this.manifestId, this.geminiAccount)) {
+      const stored = await loadSavedMemoryIds(this.manifestId, this.geminiAccount);
+      storedIdCount = stored.length;
+      for (const id of stored) {
         if (!this.savedMemoryIds.includes(id)) this.savedMemoryIds.push(id);
       }
       if (!this.isCurrent(run)) return;
     }
+    // An account saved by a build that kept no record: work out what is
+    // already there by similarity, once, before sending anything.
+    const backfilling = storedIdCount === 0;
     const done = new Set(this.savedMemoryIds);
     const stepId = "memory-save";
     const progress = (): void => {
@@ -653,6 +661,9 @@ export class MigrationOrchestrator {
     }
 
     // Skip what's already in Gemini (a repeated run, or added by hand).
+    const byIdCount = done.size;
+    let matchedExactly = 0;
+    let matchedBySimilarity = 0;
     let existingKeys: Set<string> | null = null;
     if (tabId !== null) {
       try {
@@ -664,6 +675,23 @@ export class MigrationOrchestrator {
           // A split memory counts as saved only when every piece is there.
           for (const [id, parts] of partsById) {
             if (parts.every((part) => keys.has(savedInfoKey(part)))) done.add(id);
+          }
+          matchedExactly = done.size - byIdCount;
+
+          if (backfilling) {
+            const entries = existing.texts;
+            for (const [id, parts] of partsById) {
+              if (done.has(id)) continue;
+              // Every piece has to find an entry of its own, so a memory that
+              // was too long to save never counts as already there.
+              const matched = parts.every((part) =>
+                entries.some((entry) => savedInfoSimilarity(part, entry) >= SAVED_INFO_SIMILARITY_THRESHOLD),
+              );
+              if (matched) {
+                done.add(id);
+                matchedBySimilarity++;
+              }
+            }
           }
         } else {
           console.warn(`[PortSmith] Couldn't list Gemini's saved info: ${existing.error ?? "unknown error"}`);
@@ -687,6 +715,21 @@ export class MigrationOrchestrator {
     const partsLeft = new Map<string, number>();
     for (const item of todo) partsLeft.set(item.id, (partsLeft.get(item.id) ?? 0) + 1);
     const failedIds = new Set<string>();
+
+    console.log(
+      `[PortSmith] Gemini memories: ${byIdCount} already recorded, ` +
+        `${matchedExactly} matched by text, ${matchedBySimilarity} matched by similarity` +
+        `${backfilling ? " (first run against this account)" : ""}, ` +
+        `${partsLeft.size} to send as ${todo.length} entr${todo.length === 1 ? "y" : "ies"}.`,
+    );
+
+    // Record what the backfill found before sending anything, so a run that
+    // is interrupted does not start over and re-send what is already there.
+    if (backfilling && this.manifestId && done.size > 0) {
+      this.savedMemoryIds = [...done];
+      await saveSavedMemoryIds(this.manifestId, this.geminiAccount, this.savedMemoryIds);
+      if (!this.isCurrent(run)) return;
+    }
     const markCopies = (): void => {
       for (const [id, first] of sameAs) if (done.has(first)) done.add(id);
     };

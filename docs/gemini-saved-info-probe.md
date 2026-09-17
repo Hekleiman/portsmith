@@ -133,6 +133,77 @@ in this manifest as already saved" action the user confirms, matching on
 something other than the stored wording, or accepting the duplicates. **None of
 these is implemented, and no live rerun should be started until one is.**
 
+## Choosing the similarity threshold
+
+Measured against the live account on 2026-09-17: **219 entries, 23,871 pairs**
+compared with `savedInfoSimilarity` (shared content words as a share of
+whichever entry has fewer; words under four characters dropped, numbers kept).
+
+The account already contains Gemini's own rewrites of the same memory, saved
+twice by earlier runs, so its internal pairs are real "same memory, different
+wording" examples. That is the tuning set.
+
+| Threshold | Pairs matched |
+| ---: | ---: |
+| 0.6 | 41 |
+| 0.8 | 25 |
+| 0.9 | 20 |
+| 1.0 | 18 |
+
+### 0.6 is not usable
+
+The starting point of 0.6 matches memories that are plainly different. These
+are real pairs from the account, with their scores:
+
+| Score | Entry A | Entry B | Same memory? |
+| ---: | --- | --- | --- |
+| 0.60 | "My main personal inbox is Gmail at hekleiman@gmail.com." | "I have a separate real estate business address, hkleimanrealty@gmail.com" | **No**, opposite point |
+| 0.60 | "I use a 2015 MacBook Pro 13\" as the HekTV server host." | "HekTV no longer exists (Sep 2026), do not assume it is available" | **No**, contradictory |
+| 0.67 | "Goes by Er, also Henry or Erik" | "I go by both Henry and Erik." | **Yes**, the documented rewrite |
+| 0.67 | "I go by both Henry and Erik." | "Henry is introducing himself to Rahul as \"Erik Kleiman, Brittany Sudlow's husband\"" | **No** |
+| 0.78 | "Stuart Kipper is listed as a professional reference until September 2026." | "Belinda Donner is listed as a professional reference until September 2026." | **No**, different people |
+| 0.83 | "A primary use case for my Claude Code workflow is trade-up." | "Dartvision is a primary use case for my Claude Code workflow." | **No**, different projects |
+
+The two distributions overlap. A true rewrite scores 0.67; distinct memories
+score 0.78 and 0.83. **No threshold separates them**, so the metric cannot both
+catch the rewrites and avoid the false matches.
+
+### The threshold is set for precision, at 0.9
+
+The two errors are not equal:
+
+- A **miss** re-sends a memory and adds a duplicate. Visible in the account,
+  and Erik can delete it.
+- A **false match** marks a memory as saved that never was, and it is lost
+  silently. That is the same failure that ruled out a blanket "mark everything
+  saved".
+
+So the threshold sits where no false match was observed rather than where
+recall is best. At 0.9 the 20 matched pairs are all genuine rewrites; every
+false match above is excluded. The cost is recall: the "Goes by Er" rewrite at
+0.67 is missed and will be re-sent.
+
+### Numbers are kept regardless of length
+
+Dropping every word under four characters made "Fact number 0" and "Fact number
+1" identical token sets, scoring 1.0. Numbers are short but distinguishing, so
+they survive tokenisation. Two dates or two counts stay apart.
+
+### What this does not solve
+
+At 0.9 an unknown number of already-saved memories still score below the
+threshold, because the manifest holds the original wording and Gemini holds the
+rewrite. Those get re-sent, and since Gemini accepts duplicates they become
+duplicate entries. **A live rerun is therefore still not safe**, and none was
+performed.
+
+Confirming how many would be re-sent needs the manifest, which is only readable
+from the extension's own origin (see "Reading the manifest").
+
+Separately: the account already holds **20 pairs of duplicate entries** created
+by earlier runs, visible at similarity 0.9 and above. Nothing here removes
+them; deleting from the account was out of scope.
+
 ## What this changes in PortSmith
 
 1. `SAVED_INFO_API_MAX_LENGTH = 1500` is the real create limit, separate from
@@ -149,6 +220,14 @@ these is implemented, and no live rerun should be started until one is.**
 4. Text over 1500 characters is not retried. It is refused deterministically,
    so retrying it only wastes requests. The orchestrator splits before sending,
    so this should not normally be reached.
+5. Saves run **2 at a time** rather than 6. Six produced transient refusals and
+   replies slowing from about 4 s to about 10 s. The call takes around four
+   seconds whatever the concurrency, so little is lost.
+6. When the ID store is empty for a manifest and account, `saveGeminiMemories`
+   backfills it once from similarity matches before sending anything, and
+   persists the result immediately so an interrupted run does not start over.
+   A split memory is only counted when **every piece** finds a match, so a
+   memory that was too long to save is never marked as saved.
 
 ## Not verified
 
