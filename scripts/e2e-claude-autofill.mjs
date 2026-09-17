@@ -182,18 +182,22 @@ const start = await send("MIGRATION_START", { manifestId: "m-e2e", mode: "autofi
 check(start?.success === true, `MIGRATION_START failed: ${JSON.stringify(start)}`);
 
 let status;
-let filesStep;
+const asked = [];
 for (let i = 0; i < 120; i++) {
   status = await send("MIGRATION_STATUS", undefined);
   if (status?.pendingConfirmStepId) {
-    const step = status.currentSteps.find((s) => s.id === status.pendingConfirmStepId);
-    if (step?.id === "ws-e2e-files") filesStep = step;
-    else failures.push(`Unexpected pending step: ${JSON.stringify(step)}`);
-    await send("MIGRATION_CONFIRM", { confirmed: true, token: status.pendingConfirmToken });
+    asked.push(
+      status.currentSteps.find((s) => s.id === status.pendingConfirmStepId)?.title ??
+        status.pendingConfirmStepId,
+    );
+    await send("MIGRATION_CONFIRM", { confirmed: false, token: status.pendingConfirmToken });
   }
   if (status?.phase === "memory" || status?.phase === "complete") break;
   await new Promise((r) => setTimeout(r, 250));
 }
+// Automatic mode never stops mid-run: leftovers wait for the results page.
+check(asked.length === 0, `Automatic mode stopped to ask: ${JSON.stringify(asked)}`);
+const filesStep = (status?.leftoverSteps?.["ws-e2e"] ?? []).find((c) => c.id === "ws-e2e-files");
 
 check(status?.phase === "memory", `Expected the memory step, got ${status?.phase}`);
 check((status?.memorySteps ?? []).length > 0, "No memory steps");
@@ -212,18 +216,22 @@ check(seen.uploads.length === 1, `Expected 1 upload, got ${seen.uploads.length}`
 check(/^multipart\/form-data; boundary=/.test(seen.uploads[0]?.contentType ?? ""), `Upload content type: ${seen.uploads[0]?.contentType}`);
 check(seen.uploads[0]?.body.includes('filename="spec.pdf"'), "Upload is missing the file name");
 check(seen.other.length === 0, `Unexpected API calls: ${seen.other}`);
-check(!!filesStep, "No manual step for the files Claude can't take");
-check(filesStep?.fallback?.downloads?.some((d) => d.fileName === "photo.png"), "photo.png should be offered as a download");
-check(filesStep?.fallback?.fileNames?.includes("missing.docx"), "missing.docx should be listed");
+check(!!filesStep, "No leftover card for the files Claude can't take");
+check(filesStep?.downloads?.some((d) => d.fileName === "photo.png"), "photo.png should be offered as a download");
+check(filesStep?.fileNames?.includes("missing.docx"), "missing.docx should be listed");
 check(!JSON.stringify(filesStep ?? {}).includes("notes.md"), "Uploaded files must not be listed as manual");
 check(final?.phase === "complete", `Final phase: ${final?.phase}`);
 check(final?.completedWorkspaceIds?.includes("ws-e2e"), "Workspace not completed");
 check(final?.verifiedWorkspaceIds?.includes("ws-e2e"), "Workspace not verified");
 check(final?.instructionsDelivery?.["ws-e2e"] === "autofilled", `Delivery: ${final?.instructionsDelivery?.["ws-e2e"]}`);
-check(final?.filesDelivered?.["ws-e2e"] === 4, `Files delivered: ${JSON.stringify(final?.filesDelivered)}`);
+check(final?.filesDelivered?.["ws-e2e"] === 2, `Files delivered: ${JSON.stringify(final?.filesDelivered)}`);
 check(final?.projectMemoryWorkspaceIds?.includes("ws-e2e"), "Project memory not recorded");
 check(final?.memoryImported === true, "Memory import not recorded");
-check(!final?.followUps?.["ws-e2e"], `Unexpected follow-ups: ${JSON.stringify(final?.followUps)}`);
+check(
+  JSON.stringify(final?.followUps?.["ws-e2e"] ?? []) ===
+    JSON.stringify(["Remaining files left for later"]),
+  `Follow-ups: ${JSON.stringify(final?.followUps)}`,
+);
 check(claude.url().endsWith(`/project/${PROJECT}`), `Claude tab is on ${claude.url()}`);
 
 // Run the same migration again: PortSmith must ask before creating a
@@ -236,14 +244,12 @@ for (let i = 0; i < 120; i++) {
   second = await send("MIGRATION_STATUS", undefined);
   if (second?.pendingConfirmStepId && !question) {
     question = second.currentSteps.find((st) => st.id === second.pendingConfirmStepId)?.title ?? "";
-    const stale = await send("MIGRATION_CONFIRM", { confirmed: true, token: "stale#0" });
-    check(stale?.success === false, "A stale confirmation was accepted");
     await send("MIGRATION_CONFIRM", { confirmed: false, token: second.pendingConfirmToken });
   }
   if (second?.phase === "memory" || second?.phase === "complete") break;
   await new Promise((r) => setTimeout(r, 250));
 }
-check(/already in Claude/.test(question ?? ""), `Expected a duplicate warning, got: ${question}`);
+check(question === null, `The second automatic run stopped to ask: ${question}`);
 check(seen.created === 1, `The second run created a project (${seen.created} total)`);
 check(second?.manualWorkspaces?.[0]?.reason?.includes("already in Claude"), `Second run result: ${JSON.stringify(second?.manualWorkspaces)}`);
 await send("MIGRATION_CANCEL", undefined);
