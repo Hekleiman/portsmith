@@ -126,6 +126,8 @@ export interface MigrationStepFallback {
   link?: string;
   actionHint?: string;
   stepNumber?: number;
+  /** Leaving it unticked doesn't count as unfinished work */
+  optional?: boolean;
 }
 
 export type InstructionsDelivery =

@@ -2,7 +2,11 @@
 // Step-by-step manual instructions for creating Gems in Gemini,
 // parallel to claude-adapter.generateInstructions().
 
-import type { MemoryItem, Workspace } from "@/core/schema/types";
+import type {
+  MemoryItem,
+  PlatformIdentifier,
+  Workspace,
+} from "@/core/schema/types";
 import type {
   MigrationGuidedInstructions,
   MigrationStepFallback,
@@ -133,9 +137,11 @@ export function generateGeminiMemoryInstructions(
   items: MemoryItem[],
   sourceLabel = "your previous assistant",
   customInstructions = "",
+  sourcePlatform?: SourcePlatform,
 ): MigrationStepFallback[] {
+  const chatImport = buildGeminiChatImportStep(sourcePlatform);
   const block = renderMemoryImportText(items, sourceLabel, customInstructions);
-  if (!block) return [];
+  if (!block) return chatImport ? [chatImport] : [];
   const what =
     items.length > 0
       ? `your ${items.length} memor${items.length === 1 ? "y" : "ies"}`
@@ -159,5 +165,50 @@ export function generateGeminiMemoryInstructions(
       copyBlocks: [{ label: "Memories", content: block }],
       actionHint: 'Paste, then click "Add memory"',
     },
+    ...(chatImport ? [chatImport] : []),
   ];
+}
+
+type SourcePlatform = PlatformIdentifier["platform"];
+
+export const GEMINI_IMPORT_URL = "https://gemini.google.com/import";
+
+const CHAT_EXPORT_STEPS: Partial<Record<SourcePlatform, string>> = {
+  chatgpt:
+    "In ChatGPT, click your name at the bottom left, then Settings and Data controls. " +
+    'Next to "Export data", click "Export", then "Confirm Export". ' +
+    "ChatGPT emails you a link to download a .zip file.",
+  claude:
+    "In Claude, click your name at the bottom left, then Settings and Privacy. " +
+    'Next to "Export data", click "Export", choose the date range and click "Export" again. ' +
+    "Claude emails you a download link for a .zip file. The link expires after 24 hours.",
+};
+
+/**
+ * Optional last step: Gemini imports ChatGPT and Claude chat exports itself
+ * (Settings & help > "Import memory to Gemini" > "Import chats").
+ * PortSmith doesn't move chat history, so this only points the way.
+ */
+export function buildGeminiChatImportStep(
+  sourcePlatform: SourcePlatform | undefined,
+): MigrationStepFallback | null {
+  const exportSteps = sourcePlatform ? CHAT_EXPORT_STEPS[sourcePlatform] : undefined;
+  if (!exportSteps) return null;
+  return {
+    id: "memory-chat-history",
+    title: "Bring your chat history (optional)",
+    description: [
+      "PortSmith doesn't move your chats, but Gemini can import them from an export.",
+      "",
+      `1. ${exportSteps}`,
+      '2. When the .zip is ready, open Gemini, click "Settings & help" at the bottom left, then "Import memory to Gemini".',
+      '3. Under "Import chats", click "Add" and choose the .zip file. Gemini can take up to a day to process it.',
+      "",
+      "Chat import needs a personal Google account and you must be 18 or older. It isn't available in the EEA, Switzerland or the UK.",
+    ].join("\n"),
+    copyBlocks: [],
+    link: GEMINI_IMPORT_URL,
+    actionHint: 'Under "Import chats", click "Add" and choose the .zip',
+    optional: true,
+  };
 }
