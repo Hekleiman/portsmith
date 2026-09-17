@@ -3,6 +3,7 @@ import { useMigrationStore } from "../store/migration-store";
 import {
   sendMessage,
   type KnowledgeLeftover,
+  type MigrationStepFallback,
   type OrchestratorStatus,
 } from "@/shared/messaging";
 import {
@@ -56,6 +57,7 @@ interface RunResult {
   projectMemory: Set<string>;
   /** Knowledge an automatic run couldn't add, per workspace */
   knowledgeLeftovers: Map<string, KnowledgeLeftover>;
+  leftoverSteps: Map<string, MigrationStepFallback[]>;
   /** null when the run had no memory step (or ended before it) */
   memoryImported: boolean | null;
 }
@@ -166,6 +168,7 @@ async function loadRunResult(): Promise<RunResult> {
       filesDelivered: new Map(Object.entries(status.filesDelivered ?? {})),
       projectMemory: new Set(status.projectMemoryWorkspaceIds ?? []),
       knowledgeLeftovers: new Map(Object.entries(status.knowledgeLeftovers ?? {})),
+      leftoverSteps: new Map(Object.entries(status.leftoverSteps ?? {})),
       memoryImported: status.memoryImported ?? null,
     };
   }
@@ -181,6 +184,7 @@ async function loadRunResult(): Promise<RunResult> {
     filesDelivered: new Map(Object.entries(snap?.filesDelivered ?? {})),
     projectMemory: new Set(snap?.projectMemoryWorkspaceIds ?? []),
     knowledgeLeftovers: new Map(Object.entries(snap?.knowledgeLeftovers ?? {})),
+    leftoverSteps: new Map(Object.entries(snap?.leftoverSteps ?? {})),
     memoryImported: snap?.memoryImported ?? null,
   };
 }

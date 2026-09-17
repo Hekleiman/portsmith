@@ -50,6 +50,16 @@ interface ManualWorkspace {
   reason: string;
 }
 
+/** Why an automatic run left a Claude project for the user. */
+function autoDeclineReason(step: MigrationStep): string {
+  if (!step.fallback) {
+    // The only question without a card: the name is already taken.
+    return "A project with this name is already in Claude";
+  }
+  const first = step.fallback.description.split("\n")[0]?.trim() ?? "";
+  return first || "Not created in Claude";
+}
+
 function normalizeTarget(value: string | null | undefined): Target {
   return isPlatformId(value) ? value : "claude";
 }
@@ -96,6 +106,8 @@ export class MigrationOrchestrator {
   private filesDelivered: Record<string, number> = {};
   private projectMemoryWorkspaceIds: string[] = [];
   private knowledgeLeftovers: Record<string, KnowledgeLeftover> = {};
+  /** Cards an automatic run skipped instead of waiting, per workspace */
+  private leftoverSteps: Record<string, MigrationStepFallback[]> = {};
   private memoryImported: boolean | null = null;
   /** Memory items saved to the target by PortSmith ("custom-instructions" for those) */
   private savedMemoryIds: string[] = [];
@@ -208,6 +220,7 @@ export class MigrationOrchestrator {
       this.filesDelivered = { ...(snap.filesDelivered ?? {}) };
       this.projectMemoryWorkspaceIds = [...(snap.projectMemoryWorkspaceIds ?? [])];
       this.knowledgeLeftovers = { ...(snap.knowledgeLeftovers ?? {}) };
+      this.leftoverSteps = { ...(snap.leftoverSteps ?? {}) };
       this.memoryImported = snap.memoryImported ?? null;
       this.savedMemoryIds = [...(snap.savedMemoryIds ?? [])];
       this.currentWorkspaceIndex = Math.max(
@@ -289,6 +302,7 @@ export class MigrationOrchestrator {
       filesDelivered: { ...this.filesDelivered },
       projectMemoryWorkspaceIds: [...this.projectMemoryWorkspaceIds],
       knowledgeLeftovers: { ...this.knowledgeLeftovers },
+      leftoverSteps: { ...this.leftoverSteps },
       memoryImported: this.memoryImported,
       memoryAutoSaved: this.memoryAutoSaved,
       duplicateTabWarning: this.duplicateTabWarning ?? undefined,
@@ -709,6 +723,7 @@ export class MigrationOrchestrator {
 
     let created = false;
     let skipped = false;
+    let declinedCreate: string | null = null;
 
     try {
       const gen = autofillWorkspace(workspace, tabId, {
@@ -753,6 +768,22 @@ export class MigrationOrchestrator {
 
         this.updateStep(step);
 
+        if (this.mode === "autofill" && step.status === "navigate_failed") {
+          // Automatic runs retry on their own (the adapter caps attempts).
+          nextInput = true;
+          continue;
+        }
+        if (this.mode === "autofill" && step.status === "pending") {
+          // Automatic runs never wait: leave it for the results page.
+          if (step.id === `${workspace.id}-create-api`) {
+            declinedCreate = autoDeclineReason(step);
+          } else if (step.fallback) {
+            this.addLeftoverStep(workspace.id, step.fallback);
+          }
+          nextInput = false;
+          continue;
+        }
+
         if (step.status === "pending" || step.status === "navigate_failed") {
           const confirmed = await this.waitForConfirmation(step.id);
           if (!this.isCurrent(run)) {
@@ -787,11 +818,11 @@ export class MigrationOrchestrator {
       const createStep = this.currentSteps.find((st) => st.id === `${workspace.id}-create-api`);
       this.addManualWorkspace(
         workspace,
-        skipped
+        declinedCreate ?? (skipped
           ? (createStep?.title.startsWith("Skipped:")
               ? createStep.title.slice("Skipped:".length).trim().replace(/^./, (c) => c.toUpperCase())
               : "Skipped")
-          : "Not created in Claude",
+          : "Not created in Claude"),
       );
     }
   }
@@ -1177,6 +1208,11 @@ export class MigrationOrchestrator {
     }
   }
 
+  private addLeftoverStep(workspaceId: string, card: MigrationStepFallback): void {
+    const cards = (this.leftoverSteps[workspaceId] ?? []).filter((c) => c.id !== card.id);
+    this.leftoverSteps[workspaceId] = [...cards, card];
+  }
+
   private addFollowUp(workspaceId: string, note: string): void {
     const notes = this.followUps[workspaceId] ?? [];
     if (!notes.includes(note)) notes.push(note);
@@ -1245,6 +1281,7 @@ export class MigrationOrchestrator {
       filesDelivered: { ...this.filesDelivered },
       projectMemoryWorkspaceIds: [...this.projectMemoryWorkspaceIds],
       knowledgeLeftovers: { ...this.knowledgeLeftovers },
+      leftoverSteps: { ...this.leftoverSteps },
       ...(this.memoryImported !== null ? { memoryImported: this.memoryImported } : {}),
       ...(this.savedMemoryIds.length > 0 ? { savedMemoryIds: [...this.savedMemoryIds] } : {}),
     };
@@ -1281,6 +1318,7 @@ export class MigrationOrchestrator {
     this.filesDelivered = {};
     this.projectMemoryWorkspaceIds = [];
     this.knowledgeLeftovers = {};
+    this.leftoverSteps = {};
     this.savedMemoryIds = [];
     this.memoryAutoSaved = null;
     this.memoryImported = null;

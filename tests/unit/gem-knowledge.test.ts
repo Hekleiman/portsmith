@@ -140,6 +140,23 @@ describe("buildLeftoverCards", () => {
     expect(cards[1]?.description).toContain("HTTP 400");
   });
 
+  it("shows the cards an automatic Claude run skipped", () => {
+    const cards = buildLeftoverCards(
+      [ws()],
+      {
+        completed: new Set(["a"]),
+        manual: new Map(),
+        knowledgeLeftovers: new Map(),
+        leftoverSteps: new Map([
+          ["a", [{ id: "a-files", title: "Upload the remaining files", description: "x", copyBlocks: [] }]],
+        ]),
+      },
+      "claude",
+      "ChatGPT",
+    );
+    expect(cards.map((c) => c.title)).toEqual(['Upload the remaining files ("Site")']);
+  });
+
   it("is empty after a clean run", () => {
     expect(
       buildLeftoverCards(

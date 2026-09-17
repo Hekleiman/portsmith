@@ -18,6 +18,7 @@ export function buildLeftoverCards(
     completed: Set<string>;
     manual: Map<string, string>;
     knowledgeLeftovers: Map<string, KnowledgeLeftover>;
+    leftoverSteps?: Map<string, MigrationStepFallback[]>;
   },
   target: PlatformId,
   sourceLabel: string,
@@ -28,6 +29,9 @@ export function buildLeftoverCards(
     if (reason !== undefined && !result.completed.has(ws.id)) {
       cards.push(buildManualCreateFallback(ws, target, sourceLabel, reason));
       continue;
+    }
+    for (const card of result.leftoverSteps?.get(ws.id) ?? []) {
+      cards.push({ ...card, title: `${card.title} ("${ws.name}")` });
     }
     const leftover = result.knowledgeLeftovers.get(ws.id);
     if (leftover && result.completed.has(ws.id)) {

@@ -1,5 +1,6 @@
 import Dexie, { type EntityTable } from "dexie";
 import type { PortsmithManifest } from "@/core/schema/types";
+import type { MigrationStepFallback } from "@/shared/messaging";
 
 // ─── Record Types ────────────────────────────────────────────
 
@@ -62,6 +63,8 @@ export interface MigrationStateSnapshot {
     string,
     { link: string; fileNames: string[]; projectMemory: boolean }
   >;
+  /** Steps an automatic run left for the user, per workspace */
+  leftoverSteps?: Record<string, MigrationStepFallback[]>;
   /** Memory items (and "custom-instructions") already saved to the target */
   savedMemoryIds?: string[];
   /** Whether the user finished the memory import steps */

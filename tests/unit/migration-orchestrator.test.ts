@@ -18,6 +18,7 @@ const h = vi.hoisted(() => {
     verified?: boolean;
     followUp?: string;
     filesDelivered?: number;
+    fallback?: { id: string; title: string; description: string; copyBlocks: unknown[] };
     projectMemoryAdded?: boolean;
   };
   return {
@@ -69,7 +70,7 @@ vi.mock("@/core/adapters/claude-autofill", () => ({
     h.autofillCalls.push(workspace.id);
     for (const step of h.autofillScript(workspace.id)) {
       const answer: boolean | undefined = yield step;
-      if (step.status === "pending") h.answers.push(answer);
+      if (step.status === "pending" || step.status === "navigate_failed") h.answers.push(answer);
     }
   }),
 }));
@@ -299,7 +300,7 @@ describe("MigrationOrchestrator: resume after a restart", () => {
       { id: `${id}-files`, title: "Upload by hand", status: "pending" },
     ];
     const first = new MigrationOrchestrator();
-    await first.start("m1", "autofill", ["a", "b"], "claude");
+    await first.start("m1", "hybrid", ["a", "b"], "claude");
     await waitFor(() => first.getStatus().pendingConfirmStepId === "a-files");
     const saved = h.checkpoints[h.checkpoints.length - 1]!;
     expect(saved.state.createdWorkspaceIds).toEqual(["a"]);
@@ -336,7 +337,7 @@ describe("MigrationOrchestrator: outcomes", () => {
       { id: `${id}-create-api`, title: "Not created", status: "skipped" },
     ];
     const o = new MigrationOrchestrator();
-    await o.start("m1", "autofill", ["a"], "claude");
+    await o.start("m1", "hybrid", ["a"], "claude");
     await waitFor(() => o.getStatus().pendingConfirmStepId !== null);
     o.confirmStep(false);
     await waitFor(() => o.getStatus().phase === "complete");
@@ -344,6 +345,57 @@ describe("MigrationOrchestrator: outcomes", () => {
     expect(o.getStatus().completedWorkspaceIds).toEqual([]);
     expect(o.getStatus().manualWorkspaces).toEqual([
       { id: "a", name: "Workspace a", reason: "Skipped" },
+    ]);
+  });
+
+  it("never waits in automatic mode: failed steps become cards for the end", async () => {
+    putManifest("m1", [ws("a"), ws("b")]);
+    const card = (id: string) => ({ id, title: "Paste the project instructions", description: "Claude didn't accept them (HTTP 500).", copyBlocks: [] });
+    h.autofillScript = (id) =>
+      id === "a"
+        ? [
+            { id: "a-navigate", title: "Refresh the Claude tab", status: "navigate_failed" },
+            { id: "a-create-api", title: "Project created", status: "success", projectCreated: true },
+            { id: "a-instructions-api", title: "Add the instructions by hand", status: "pending", fallback: card("a-instructions-api") },
+            { id: "a-instructions-api", title: "Instructions skipped", status: "skipped" },
+          ]
+        : [
+            {
+              id: "b-create-api",
+              title: "Couldn't create the project automatically",
+              status: "pending",
+              fallback: { id: "b-manual-create", title: "Create", description: "Claude didn't confirm the new project (HTTP 429). Check first.\n1. Open", copyBlocks: [] },
+            },
+            { id: "b-create-api", title: "Not created", status: "skipped" },
+          ];
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "autofill", ["a", "b"], "claude");
+    await waitFor(() => o.getStatus().phase === "complete");
+    expect(h.answers).toEqual([true, false, false]);
+    const status = o.getStatus();
+    expect(status.pendingConfirmStepId).toBeNull();
+    expect(status.completedWorkspaceIds).toEqual(["a"]);
+    expect(status.followUps.a).toEqual(["Instructions skipped"]);
+    expect(status.leftoverSteps.a?.map((c) => c.id)).toEqual(["a-instructions-api"]);
+    expect(status.leftoverSteps.b).toBeUndefined();
+    expect(status.manualWorkspaces).toEqual([
+      { id: "b", name: "Workspace b", reason: "Claude didn't confirm the new project (HTTP 429). Check first." },
+    ]);
+    expect(h.checkpoints[h.checkpoints.length - 1]!.state.leftoverSteps?.a).toHaveLength(1);
+  });
+
+  it("skips a taken Claude project name without asking in automatic mode", async () => {
+    putManifest("m1", [ws("a")]);
+    h.autofillScript = (id) => [
+      { id: `${id}-create-api`, title: "A project named this is already in Claude. Create another one?", status: "pending" },
+      { id: `${id}-create-api`, title: "Skipped: a project with this name is already in Claude", status: "skipped" },
+    ];
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "autofill", ["a"], "claude");
+    await waitFor(() => o.getStatus().phase === "complete");
+    expect(h.answers).toEqual([false]);
+    expect(o.getStatus().manualWorkspaces).toEqual([
+      { id: "a", name: "Workspace a", reason: "A project with this name is already in Claude" },
     ]);
   });
 

@@ -215,6 +215,8 @@ export interface OrchestratorStatus {
   projectMemoryWorkspaceIds: string[];
   /** Knowledge to add by hand after the run, per workspace */
   knowledgeLeftovers: Record<string, KnowledgeLeftover>;
+  /** Steps an automatic run left for the user instead of waiting, per workspace */
+  leftoverSteps: Record<string, MigrationStepFallback[]>;
   /** Memories PortSmith saved to the target by itself (null: it didn't try) */
   memoryAutoSaved: { saved: number; total: number } | null;
   /** Whether the user finished the memory steps (null: there were none yet) */
