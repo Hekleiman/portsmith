@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import "fake-indexeddb/auto";
 import { _resetForTests } from "@/core/storage/indexed-db";
+import { checkpoint, createInitialState } from "@/core/storage/migration-state";
 import {
   useMigrationStore,
   phaseToStep,
@@ -10,7 +11,16 @@ import {
 
 // Mock chrome.storage.local for preference persistence
 let prefStore: Record<string, unknown> = {};
+const runtimeSendMessage = vi.fn(
+  (_msg: unknown, cb?: (r: unknown) => void) => {
+    cb?.({ __portsmith: true, ok: true, data: { success: true } });
+  },
+);
 vi.stubGlobal("chrome", {
+  runtime: {
+    sendMessage: runtimeSendMessage,
+    lastError: null,
+  },
   storage: {
     local: {
       get: vi.fn(async (keys: string | string[]) => {
@@ -36,18 +46,21 @@ vi.stubGlobal("chrome", {
 
 beforeEach(async () => {
   prefStore = {};
+  runtimeSendMessage.mockClear();
   await _resetForTests();
   useMigrationStore.setState({
     phase: "idle",
     sourcePlatform: null,
     targetPlatform: null,
     extractionMethod: null,
+    deliveryMode: null,
     manifestId: null,
     selectedWorkspaceIds: [],
     completedWorkspaceIds: [],
     errors: [],
     pendingResume: null,
     resumeChecked: false,
+    resumedMigration: false,
   });
 });
 
@@ -206,7 +219,7 @@ describe("selection setters", () => {
 
 describe("checkpoint persistence", () => {
   it("auto-checkpoints on phase change", async () => {
-    useMigrationStore.getState().nextStep(); // idle → target_selection
+    useMigrationStore.getState().goToStep("review");
 
     // Wait for async checkpoint
     await new Promise((r) => setTimeout(r, 50));
@@ -217,7 +230,36 @@ describe("checkpoint persistence", () => {
 
     const { pendingResume } = useMigrationStore.getState();
     expect(pendingResume).not.toBeNull();
-    expect(pendingResume?.state.phase).toBe("target_selection");
+    expect(pendingResume?.state.phase).toBe("review");
+  });
+
+  it("does not offer to resume trivial setup phases", async () => {
+    useMigrationStore.getState().nextStep(); // idle → target_selection
+    await new Promise((r) => setTimeout(r, 50));
+
+    useMigrationStore.setState({ resumeChecked: false });
+    await useMigrationStore.getState().checkForResume();
+    expect(useMigrationStore.getState().pendingResume).toBeNull();
+    expect(useMigrationStore.getState().resumeChecked).toBe(true);
+  });
+
+  it("does not write its own checkpoint when entering the migration", async () => {
+    // The service worker owns checkpoints while migrating. A panel-written
+    // checkpoint at workspace index 0 used to make resumed runs start over.
+    await checkpoint(
+      { ...createInitialState(), phase: "migrating", manifestId: "m1", deliveryMode: "autofill", selectedWorkspaceIds: ["a", "b"], completedWorkspaceIds: ["a"] },
+      1,
+      4,
+    );
+    useMigrationStore.getState().goToStep("migrating");
+    await new Promise((r) => setTimeout(r, 50));
+
+    useMigrationStore.setState({ phase: "idle", resumeChecked: false });
+    await useMigrationStore.getState().checkForResume();
+    expect(useMigrationStore.getState().pendingResume?.workspaceIndex).toBe(1);
+    expect(
+      useMigrationStore.getState().pendingResume?.state.completedWorkspaceIds,
+    ).toEqual(["a"]);
   });
 
   it("does not checkpoint on idle", async () => {
@@ -253,9 +295,24 @@ describe("resume flow", () => {
     expect(useMigrationStore.getState().pendingResume).toBeNull();
   });
 
+  it("acceptResume of a running migration flags it for the Migrate page", async () => {
+    await checkpoint(
+      { ...createInitialState(), phase: "migrating", manifestId: "m1", deliveryMode: "guided", selectedWorkspaceIds: ["a"] },
+      0,
+      4,
+    );
+    await useMigrationStore.getState().checkForResume();
+    useMigrationStore.getState().acceptResume();
+    expect(useMigrationStore.getState().phase).toBe("migrating");
+    expect(useMigrationStore.getState().resumedMigration).toBe(true);
+  });
+
   it("declineResume clears checkpoint", async () => {
-    useMigrationStore.getState().goToStep("migrating");
-    await new Promise((r) => setTimeout(r, 50));
+    await checkpoint(
+      { ...createInitialState(), phase: "migrating", manifestId: "m1", deliveryMode: "autofill" },
+      0,
+      4,
+    );
 
     useMigrationStore.setState({ phase: "idle", resumeChecked: false });
     await useMigrationStore.getState().checkForResume();
@@ -268,5 +325,85 @@ describe("resume flow", () => {
     useMigrationStore.setState({ resumeChecked: false });
     await useMigrationStore.getState().checkForResume();
     expect(useMigrationStore.getState().pendingResume).toBeNull();
+  });
+});
+
+describe("platform selection guards", () => {
+  it("clears the target when the source is set to the same platform", () => {
+    useMigrationStore.setState({ targetPlatform: "claude" });
+    useMigrationStore.getState().setSourcePlatform("claude");
+    expect(useMigrationStore.getState().sourcePlatform).toBe("claude");
+    expect(useMigrationStore.getState().targetPlatform).toBeNull();
+  });
+
+  it("refuses a target equal to the source", () => {
+    useMigrationStore.getState().setSourcePlatform("gemini");
+    useMigrationStore.getState().setTargetPlatform("gemini");
+    expect(useMigrationStore.getState().targetPlatform).toBeNull();
+  });
+
+  it("cannot proceed from target selection with source == target", async () => {
+    const { canProceed } = await import("@/sidepanel/store/migration-store");
+    const state = {
+      ...useMigrationStore.getState(),
+      phase: "target_selection" as const,
+      sourcePlatform: "claude",
+      targetPlatform: "claude",
+    };
+    expect(canProceed(state)).toBe(false);
+  });
+
+  it("cannot start a run with nothing selected", async () => {
+    const { canProceed } = await import("@/sidepanel/store/migration-store");
+    const base = { ...useMigrationStore.getState(), phase: "mode_selection" as const, deliveryMode: "autofill" as const };
+    expect(canProceed({ ...base, selectedWorkspaceIds: [] })).toBe(false);
+    expect(canProceed({ ...base, selectedWorkspaceIds: ["ws-1"] })).toBe(true);
+  });
+
+  it("remembers which manifest was already reviewed until reset", () => {
+    useMigrationStore.getState().setReviewedManifestId("m-1");
+    expect(useMigrationStore.getState().reviewedManifestId).toBe("m-1");
+    useMigrationStore.getState().reset();
+    expect(useMigrationStore.getState().reviewedManifestId).toBeNull();
+  });
+
+  it("changing the source drops the previous extraction", () => {
+    useMigrationStore.setState({
+      sourcePlatform: "chatgpt",
+      manifestId: "manifest-old",
+      selectedWorkspaceIds: ["ws-1", "ws-2"],
+      extractionMethod: "browser",
+    });
+    useMigrationStore.getState().setSourcePlatform("gemini");
+    const s = useMigrationStore.getState();
+    expect(s.manifestId).toBeNull();
+    expect(s.selectedWorkspaceIds).toEqual([]);
+    expect(s.extractionMethod).toBeNull();
+  });
+
+  it("switches to guided mode when ChatGPT becomes the target", () => {
+    useMigrationStore.setState({ sourcePlatform: "claude", deliveryMode: "autofill" });
+    useMigrationStore.getState().setTargetPlatform("chatgpt");
+    expect(useMigrationStore.getState().deliveryMode).toBe("guided");
+  });
+
+  it("ignores a saved target that equals the saved source", async () => {
+    prefStore = {
+      "pref:lastSourcePlatform": "claude",
+      "pref:lastTargetPlatform": "claude",
+    };
+    await useMigrationStore.getState().checkForResume();
+    expect(useMigrationStore.getState().sourcePlatform).toBe("claude");
+    expect(useMigrationStore.getState().targetPlatform).toBeNull();
+  });
+});
+
+describe("reset", () => {
+  it("also cancels any run held by the service worker", () => {
+    useMigrationStore.getState().reset();
+    const types = runtimeSendMessage.mock.calls.map(
+      (c) => (c[0] as { type?: string }).type,
+    );
+    expect(types).toContain("MIGRATION_CANCEL");
   });
 });

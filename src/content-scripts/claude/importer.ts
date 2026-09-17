@@ -7,6 +7,16 @@ import {
   initMessageRouter,
   type AutofillAction,
 } from "@/shared/messaging";
+import { base64ToBytes, base64ToText } from "@/shared/encoding";
+import { isTextLikeFile } from "@/core/transform/file-compatibility";
+import {
+  ClaudeApiError,
+  claudeRequest,
+  getOrgId,
+  isUuid,
+  listProjectSummaries,
+  nameKey,
+} from "./api";
 
 // ─── DOM Action Helpers ─────────────────────────────────────
 
@@ -224,33 +234,6 @@ onMessage("WAIT_FOR_NAVIGATION", (payload) => {
   });
 });
 
-// ─── Clipboard Handler ─────────────────────────────────────
-
-onMessage("CLIPBOARD_WRITE", async (payload) => {
-  try {
-    await navigator.clipboard.writeText(payload.text);
-    return { success: true };
-  } catch {
-    // Fallback for non-secure contexts or permission denial
-    try {
-      const textarea = document.createElement("textarea");
-      textarea.value = payload.text;
-      textarea.style.position = "fixed";
-      textarea.style.opacity = "0";
-      document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand("copy");
-      document.body.removeChild(textarea);
-      return { success: true };
-    } catch (err) {
-      return {
-        success: false,
-        error: err instanceof Error ? err.message : String(err),
-      };
-    }
-  }
-});
-
 // ─── Compound Instructions Handler ────────────────────────
 
 function delayMs(ms: number): Promise<void> {
@@ -441,8 +424,8 @@ onMessage("FILL_PROJECT_INSTRUCTIONS", async (payload) => {
     // Step 6: Verify the fill actually worked
     const filled = textarea.value.length > 0;
     if (!filled) {
-      console.log("[PortSmith] Instructions fill failed — textarea still empty after fill");
-      return { success: false, error: "Instructions fill failed — textarea still empty after fill" };
+      console.log("[PortSmith] Instructions fill failed: the text box is still empty");
+      return { success: false, error: "Instructions fill failed: the text box is still empty" };
     }
 
     // Step 7: Click "Save instructions" in the modal
@@ -466,9 +449,8 @@ onMessage("FILL_PROJECT_INSTRUCTIONS", async (payload) => {
 // Same-origin fetch — cookies are included automatically because
 // the content script runs on claude.ai. No MAIN world needed.
 
-function getOrgId(): string | null {
-  const match = document.cookie.match(/lastActiveOrg=([^;]+)/);
-  return match?.[1] ?? null;
+function apiError(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
 }
 
 onMessage("CLAUDE_CREATE_PROJECT", async (payload) => {
@@ -478,14 +460,13 @@ onMessage("CLAUDE_CREATE_PROJECT", async (payload) => {
     return { success: false, error: "Not logged in to Claude" };
   }
 
-  console.log("[PortSmith] Creating project via API:", payload.name, "org:", orgId);
+  console.log("[PortSmith] Creating project via API:", payload.name);
 
   try {
-    const resp = await fetch(
+    const data = await claudeRequest<{ uuid?: unknown }>(
       `/api/organizations/${orgId}/projects`,
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: payload.name,
           description: payload.description,
@@ -493,21 +474,17 @@ onMessage("CLAUDE_CREATE_PROJECT", async (payload) => {
         }),
       },
     );
-
-    console.log("[PortSmith] Create project response:", resp.status);
-
-    if (!resp.ok) {
-      const text = await resp.text().catch(() => "");
-      console.error("[PortSmith] Create project failed:", resp.status, text.substring(0, 200));
-      return { success: false, error: `HTTP ${resp.status}: ${text.substring(0, 200)}` };
+    if (!isUuid(data?.uuid)) {
+      return {
+        success: false,
+        error: "Claude did not return a project ID; check your projects before retrying",
+      };
     }
-
-    const data = (await resp.json()) as { uuid: string };
     console.log("[PortSmith] Project created:", data.uuid);
     return { success: true, uuid: data.uuid };
   } catch (e) {
-    console.error("[PortSmith] Create project fetch error:", e);
-    return { success: false, error: e instanceof Error ? e.message : String(e) };
+    console.error("[PortSmith] Create project failed:", e);
+    return { success: false, error: apiError(e) };
   }
 });
 
@@ -517,180 +494,180 @@ onMessage("CLAUDE_SET_INSTRUCTIONS", async (payload) => {
     console.error("[PortSmith] CLAUDE_SET_INSTRUCTIONS: no org ID in cookies");
     return { success: false, error: "Not logged in to Claude" };
   }
+  if (!isUuid(payload.projectUuid)) {
+    return { success: false, error: "Invalid project ID" };
+  }
 
-  console.log("[PortSmith] Setting instructions for project:", payload.projectUuid, `(${payload.instructions.length} chars)`);
+  console.log(
+    "[PortSmith] Setting instructions for project:",
+    payload.projectUuid,
+    `(${payload.instructions.length} chars)`,
+  );
 
   try {
-    const resp = await fetch(
+    await claudeRequest<unknown>(
       `/api/organizations/${orgId}/projects/${payload.projectUuid}`,
       {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt_template: payload.instructions }),
       },
     );
-
-    console.log("[PortSmith] Set instructions response:", resp.status);
-
-    if (!resp.ok) {
-      const text = await resp.text().catch(() => "");
-      console.error("[PortSmith] Set instructions failed:", resp.status, text.substring(0, 200));
-      return { success: false, error: `HTTP ${resp.status}: ${text.substring(0, 200)}` };
-    }
-
-    console.log("[PortSmith] Instructions set successfully");
     return { success: true };
   } catch (e) {
-    console.error("[PortSmith] Set instructions fetch error:", e);
-    return { success: false, error: e instanceof Error ? e.message : String(e) };
+    console.error("[PortSmith] Set instructions failed:", e);
+    return { success: false, error: apiError(e) };
   }
 });
 
-// ─── Verify / Upload / List Files Handlers ─────────────────
+// ─── Verify / Upload / Docs Handlers ───────────────────────
 
 onMessage("CLAUDE_VERIFY_PROJECT", async (payload) => {
   const orgId = getOrgId();
   if (!orgId) return { success: false, error: "Not logged in to Claude" };
-
-  console.log("[PortSmith] Verifying project:", payload.projectUuid);
+  if (!isUuid(payload.projectUuid)) {
+    return { success: false, error: "Invalid project ID" };
+  }
 
   try {
-    const resp = await fetch(
-      `/api/organizations/${orgId}/projects/${payload.projectUuid}`,
-    );
-
-    if (!resp.ok) {
-      const text = await resp.text().catch(() => "");
-      return { success: false, error: `HTTP ${resp.status}: ${text.substring(0, 200)}` };
-    }
-
-    const data = (await resp.json()) as {
+    const data = await claudeRequest<{
       name?: string;
       prompt_template?: string;
       files_count?: number;
-    };
-    console.log("[PortSmith] Verify result: name =", data.name, "instructions =", !!data.prompt_template?.trim(), "files =", data.files_count);
+      docs_count?: number;
+    }>(`/api/organizations/${orgId}/projects/${payload.projectUuid}`);
     return {
       success: true,
-      name: data.name,
-      hasInstructions: !!data.prompt_template?.trim(),
-      instructionsLength: data.prompt_template?.length ?? 0,
-      filesCount: data.files_count ?? 0,
+      name: data?.name,
+      hasInstructions: !!data?.prompt_template?.trim(),
+      instructionsLength: data?.prompt_template?.length ?? 0,
+      filesCount: (data?.files_count ?? 0) + (data?.docs_count ?? 0),
     };
   } catch (e) {
     console.error("[PortSmith] Verify project error:", e);
-    return { success: false, error: e instanceof Error ? e.message : String(e) };
+    return { success: false, error: apiError(e) };
   }
 });
 
+async function createProjectDoc(
+  orgId: string,
+  projectUuid: string,
+  fileName: string,
+  content: string,
+): Promise<{ success: boolean; uuid?: string; error?: string }> {
+  const data = await claudeRequest<{ uuid?: unknown }>(
+    `/api/organizations/${orgId}/projects/${projectUuid}/docs`,
+    {
+      method: "POST",
+      body: JSON.stringify({ file_name: fileName, content }),
+    },
+  );
+  return {
+    success: true,
+    uuid: typeof data?.uuid === "string" ? data.uuid : undefined,
+  };
+}
+
+onMessage("CLAUDE_CREATE_DOC", async (payload) => {
+  const orgId = getOrgId();
+  if (!orgId) return { success: false, error: "Not logged in to Claude" };
+  if (!isUuid(payload.projectUuid)) {
+    return { success: false, error: "Invalid project ID" };
+  }
+  try {
+    return await createProjectDoc(
+      orgId,
+      payload.projectUuid,
+      payload.fileName,
+      payload.content,
+    );
+  } catch (e) {
+    console.error("[PortSmith] Create doc failed:", e);
+    return { success: false, error: apiError(e) };
+  }
+});
+
+/**
+ * Upload a knowledge file to a Claude project.
+ *
+ * Claude's web app sends text files as JSON project docs
+ * (POST /projects/{id}/docs with {file_name, content}) and binary files as
+ * multipart uploads (POST /projects/{id}/upload). v0.3.0 posted multipart
+ * data to /docs, which is why automated uploads fell back to manual.
+ */
 onMessage("CLAUDE_UPLOAD_FILE", async (payload) => {
   const orgId = getOrgId();
   if (!orgId) return { success: false, error: "Not logged in to Claude" };
+  if (!isUuid(payload.projectUuid)) {
+    return { success: false, error: "Invalid project ID" };
+  }
 
   try {
-    const binaryStr = atob(payload.fileBlob);
-    const bytes = new Uint8Array(binaryStr.length);
-    for (let i = 0; i < binaryStr.length; i++) {
-      bytes[i] = binaryStr.charCodeAt(i);
+    if (isTextLikeFile(payload.fileName, payload.mimeType)) {
+      const text = base64ToText(payload.fileBlob);
+      if (text !== null) {
+        console.log("[PortSmith] Uploading text doc:", payload.fileName, `(${text.length} chars)`);
+        const result = await createProjectDoc(
+          orgId,
+          payload.projectUuid,
+          payload.fileName,
+          text,
+        );
+        return { success: result.success, fileUuid: result.uuid };
+      }
+      // Not valid UTF-8: fall through to a binary upload.
     }
-    const blob = new Blob([bytes], { type: payload.mimeType });
 
+    const bytes = base64ToBytes(payload.fileBlob);
+    const blob = new Blob([bytes], {
+      type: payload.mimeType || "application/octet-stream",
+    });
     const formData = new FormData();
     formData.append("file", blob, payload.fileName);
 
     console.log("[PortSmith] Uploading file:", payload.fileName, `(${bytes.length} bytes)`);
 
-    const resp = await fetch(
-      `/api/organizations/${orgId}/projects/${payload.projectUuid}/docs`,
-      {
-        method: "POST",
-        body: formData,
-      },
+    const data = await claudeRequest<{ file_uuid?: string; uuid?: string }>(
+      `/api/organizations/${orgId}/projects/${payload.projectUuid}/upload`,
+      { method: "POST", body: formData },
     );
-
-    if (!resp.ok) {
-      const text = await resp.text().catch(() => "");
-      console.error("[PortSmith] File upload failed:", resp.status, text.substring(0, 200));
-      return { success: false, error: `HTTP ${resp.status}: ${text.substring(0, 200)}` };
-    }
-
-    const data = (await resp.json()) as { file_uuid?: string; uuid?: string };
-    const fileUuid = data.file_uuid ?? data.uuid;
-    console.log("[PortSmith] File uploaded:", fileUuid);
-    return { success: true, fileUuid };
+    return { success: true, fileUuid: data?.file_uuid ?? data?.uuid };
   } catch (e) {
     console.error("[PortSmith] File upload error:", e);
-    return { success: false, error: e instanceof Error ? e.message : String(e) };
+    const hint =
+      e instanceof ClaudeApiError && e.status === 413
+        ? " (file too large for Claude)"
+        : "";
+    return { success: false, error: `${apiError(e)}${hint}` };
   }
 });
 
-onMessage("CLAUDE_LIST_FILES", async (payload) => {
+// ─── Project lookup (verification without navigation) ──────
+
+onMessage("CLAUDE_FIND_PROJECTS", async (payload) => {
   const orgId = getOrgId();
-  if (!orgId) return { success: false, error: "Not logged in to Claude" };
-
-  try {
-    const resp = await fetch(
-      `/api/organizations/${orgId}/projects/${payload.projectUuid}/docs`,
-    );
-
-    if (!resp.ok) {
-      return { success: false, error: `HTTP ${resp.status}` };
-    }
-
-    const data = (await resp.json()) as Array<{
-      file_uuid?: string;
-      uuid?: string;
-      file_name?: string;
-      file_kind?: string;
-      size_bytes?: number | null;
-    }>;
+  if (!orgId) {
     return {
-      success: true,
-      files: (data ?? []).map((f) => ({
-        uuid: f.file_uuid ?? f.uuid ?? "",
-        name: f.file_name ?? "",
-        kind: f.file_kind ?? "",
-        sizeBytes: f.size_bytes ?? null,
-      })),
+      found: [],
+      notFound: payload.names,
+      error: "Not logged in to Claude",
     };
-  } catch (e) {
-    return { success: false, error: e instanceof Error ? e.message : String(e) };
   }
-});
-
-// ─── Page URL Handler ──────────────────────────────────────
-
-onMessage("GET_PAGE_URL", () => {
-  return { url: window.location.href };
-});
-
-// ─── Verification Handler ──────────────────────────────────
-
-onMessage("VERIFY_PROJECTS", (payload) => {
-  const found: string[] = [];
-  const notFound: string[] = [];
-
-  // Scan the projects page for matching project names.
-  // Claude renders projects as links, headings, or labeled elements.
-  const candidates = document.querySelectorAll(
-    'a[href*="/project/"], [data-testid*="project"], h3, h4, .font-medium, [class*="project"]',
-  );
-
-  const pageTexts = Array.from(candidates)
-    .map((el) => el.textContent?.trim().toLowerCase() ?? "")
-    .filter(Boolean);
-
-  for (const name of payload.projectNames) {
-    const normalized = name.toLowerCase().trim();
-    const match = pageTexts.some((text) => text === normalized);
-    if (match) {
-      found.push(name);
-    } else {
-      notFound.push(name);
+  try {
+    const projects = await listProjectSummaries(orgId);
+    const wanted = new Set(payload.names.map(nameKey));
+    const matches = projects
+      .filter((p) => wanted.has(nameKey(p.name)))
+      .sort((a, b) => (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0));
+    const existing = new Set(matches.map((p) => nameKey(p.name)));
+    const found: string[] = [];
+    const notFound: string[] = [];
+    for (const name of payload.names) {
+      (existing.has(nameKey(name)) ? found : notFound).push(name);
     }
+    return { found, notFound, matches };
+  } catch (e) {
+    return { found: [], notFound: payload.names, error: apiError(e) };
   }
-
-  return { found, notFound };
 });
 
 // ─── Ping Handler ───────────────────────────────────────────

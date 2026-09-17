@@ -25,6 +25,8 @@ import {
   generateCapabilityWarnings,
 } from "./prompt-translator";
 import { mapMemoryItems } from "./memory-mapper";
+import { MANIFEST_VERSION, GENERATED_BY } from "@/shared/constants";
+import { normalizeGizmoId, sameGizmo } from "@/shared/chatgpt-ids";
 import {
   isClaudeCompatible,
   getConversionSuggestion,
@@ -332,8 +334,9 @@ function extractTopicsFromConversations(
 // ─── Timestamp Helpers ───────────────────────────────────────
 
 function unixToISO(unix: number): string {
-  if (unix <= 0) return new Date().toISOString();
-  return new Date(unix * 1000).toISOString();
+  if (!Number.isFinite(unix) || unix <= 0) return new Date().toISOString();
+  const date = new Date(unix * 1000);
+  return Number.isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
 }
 
 // ─── Workspace Building ─────────────────────────────────────
@@ -342,7 +345,7 @@ function buildWorkspaceFromGPT(
   gpt: ExtractedCustomGPT,
   conversations: ParsedConversation[],
 ): Workspace {
-  const relatedConvs = conversations.filter((c) => c.gizmoId === gpt.id);
+  const relatedConvs = conversations.filter((c) => sameGizmo(c.gizmoId, gpt.id));
   const topics = extractTopicsFromConversations(relatedConvs);
   const translation = translateForClaude(gpt.instructions);
   const capabilities = mapCapabilities(gpt.instructions);
@@ -368,9 +371,11 @@ function buildWorkspaceFromGPT(
       ? Math.max(...relatedConvs.map((c) => c.updateTime))
       : Date.now() / 1000;
 
+  const gptId = normalizeGizmoId(gpt.id) ?? gpt.id;
+
   return {
-    id: `ws-${gpt.id}`,
-    sourceId: gpt.id,
+    id: `ws-${gptId}`,
+    sourceId: gptId,
     name: gpt.name,
     description: gpt.description,
     instructions: {
@@ -407,20 +412,30 @@ function buildWorkspaceFromGPT(
 
 function buildWorkspaceFromProject(
   project: ExtractedChatGPTProject,
+  conversations: ParsedConversation[] = [],
 ): Workspace {
+  const projectId = normalizeGizmoId(project.id) ?? project.id;
+  const relatedConvs = conversations.filter((c) => sameGizmo(c.gizmoId, projectId));
+  const topics = extractTopicsFromConversations(relatedConvs);
   const translation = translateForClaude(project.instructions);
   const capabilities = mapCapabilities(project.instructions);
   const knowledgeFiles = mapKnowledgeFiles(
     project.knowledgeFileNames,
     project.knowledgeFileMetadata,
   );
-  const category = categorizeWorkspace(project.name, project.instructions, []);
+  const category = categorizeWorkspace(project.name, project.instructions, topics);
 
   const capWarnings = generateCapabilityWarnings(
     detectCapabilities(project.instructions),
   );
 
   const manualSteps: string[] = [];
+  if (project.incomplete) {
+    capWarnings.unshift(
+      "PortSmith couldn't read this project's instructions or files. Open the project in ChatGPT and copy them in the editor, or read your data again.",
+    );
+    manualSteps.push("Copy the project's instructions and files by hand");
+  }
   if (knowledgeFiles.length > 0) {
     manualSteps.push(
       `Upload ${knowledgeFiles.length} knowledge file(s) to project`,
@@ -434,11 +449,18 @@ function buildWorkspaceFromProject(
     capabilities,
   );
   // Boost confidence by 0.05 (capped at 1) because project→project is a direct mapping
-  const confidence = Math.min(1, Math.round((baseConfidence + 0.05) * 100) / 100);
+  const confidence = project.incomplete
+    ? 0.3
+    : Math.min(1, Math.round((baseConfidence + 0.05) * 100) / 100);
+
+  const lastActive =
+    relatedConvs.length > 0
+      ? Math.max(...relatedConvs.map((c) => c.updateTime))
+      : 0;
 
   return {
-    id: `ws-proj-${project.id}`,
-    sourceId: project.id,
+    id: `ws-proj-${projectId}`,
+    sourceId: projectId,
     name: project.name,
     description: project.description,
     instructions: {
@@ -452,9 +474,9 @@ function buildWorkspaceFromProject(
     tags: ["chatgpt-project"],
     behavior: {},
     capabilities,
-    conversationCount: project.conversationCount,
-    lastActiveAt: new Date().toISOString(),
-    sampleTopics: [],
+    conversationCount: Math.max(project.conversationCount, relatedConvs.length),
+    lastActiveAt: unixToISO(lastActive),
+    sampleTopics: topics,
     migration: {
       confidence,
       warnings: capWarnings,
@@ -470,21 +492,14 @@ function buildGlobalInstructions(
 ): string {
   if (!customInstructions) return "";
 
+  // Keep the user's own words (these go into memory imports and settings
+  // fields, not project instructions) and keep the two fields apart.
   const parts: string[] = [];
-
-  if (customInstructions.aboutUser) {
-    parts.push(customInstructions.aboutUser);
-  }
-
-  if (customInstructions.responsePreferences) {
-    parts.push(customInstructions.responsePreferences);
-  }
-
-  if (parts.length === 0) return "";
-
-  const raw = parts.join("\n\n");
-  const { translated, rulesApplied } = translateForClaude(raw);
-  return rulesApplied.length > 0 ? translated : raw;
+  const about = customInstructions.aboutUser.trim();
+  const prefs = customInstructions.responsePreferences.trim();
+  if (about) parts.push(`About me:\n${about}`);
+  if (prefs) parts.push(`How I'd like responses:\n${prefs}`);
+  return parts.join("\n\n");
 }
 
 // ─── Public API ──────────────────────────────────────────────
@@ -500,16 +515,22 @@ export function generateManifest(
 
   // Projects first — they map directly to Claude Projects
   if (domData?.projects) {
+    const seen = new Set<string>();
     for (const project of domData.projects) {
-      workspaces.push(buildWorkspaceFromProject(project));
+      const ws = buildWorkspaceFromProject(project, rawChatGPT.conversations);
+      if (seen.has(ws.id)) continue;
+      seen.add(ws.id);
+      workspaces.push(ws);
     }
   }
 
   if (domData?.customGPTs) {
+    const seen = new Set(workspaces.map((w) => w.id));
     for (const gpt of domData.customGPTs) {
-      workspaces.push(
-        buildWorkspaceFromGPT(gpt, rawChatGPT.conversations),
-      );
+      const ws = buildWorkspaceFromGPT(gpt, rawChatGPT.conversations);
+      if (seen.has(ws.id)) continue;
+      seen.add(ws.id);
+      workspaces.push(ws);
     }
   }
 
@@ -527,7 +548,7 @@ export function generateManifest(
   const exportMethod = hasDOM ? "dom_extraction" : "official_export";
 
   return {
-    version: "0.1.0",
+    version: MANIFEST_VERSION,
     exportedAt: now,
     source: {
       platform: "chatgpt",
@@ -547,7 +568,7 @@ export function generateManifest(
     memory,
     globalInstructions,
     metadata: {
-      generatedBy: "portsmith/0.1.0",
+      generatedBy: GENERATED_BY,
     },
   };
 }

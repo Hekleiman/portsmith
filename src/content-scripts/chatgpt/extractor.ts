@@ -22,6 +22,7 @@ import type {
   DOMInspectionReport,
   GizmoAPIResponse,
 } from "@/shared/messaging";
+import { normalizeGizmoId } from "@/shared/chatgpt-ids";
 import type {
   ExtractedCustomGPT,
   ExtractedChatGPTProject,
@@ -60,7 +61,7 @@ function readText(
 ): string {
   const result = resolveSelector(strategies);
   if (!result.success) {
-    warn(warnings, fieldName, `Element not found — skipped`);
+    warn(warnings, fieldName, `Element not found, skipped`);
     return "";
   }
 
@@ -82,7 +83,7 @@ async function readTextAsync(
 ): Promise<string> {
   const result = await waitForSelector(strategies, timeoutMs);
   if (!result.success) {
-    warn(warnings, fieldName, `Element not found after ${timeoutMs}ms — skipped`);
+    warn(warnings, fieldName, `Element not found after ${timeoutMs}ms, skipped`);
     return "";
   }
 
@@ -203,7 +204,7 @@ async function extractSingleGPT(
 ): Promise<ExtractedCustomGPT | null> {
   const name = await readTextAsync(GPT_EDITOR.name, "GPT name", warnings);
   if (!name) {
-    warn(warnings, "GPT extraction", "Could not find GPT name — page may not be loaded");
+    warn(warnings, "GPT extraction", "Could not find the GPT name. The page may not be loaded yet.");
     return null;
   }
 
@@ -267,7 +268,7 @@ export async function extractCustomGPTs(): Promise<CustomGPTExtractionResult> {
     // without navigating to each editor page. Return the IDs as partial results.
     const cards = resolveAllElements(GPT_LIST.gptCards);
     if (cards.length === 0) {
-      warn(warnings, "GPT list", "No GPT cards found — page may not be loaded");
+      warn(warnings, "GPT list", "No GPT cards found. The page may not be loaded yet.");
     }
     for (const card of cards) {
       const href = card.getAttribute("href") ?? "";
@@ -287,7 +288,7 @@ export async function extractCustomGPTs(): Promise<CustomGPTExtractionResult> {
           conversationStarters: [],
           knowledgeFileNames: [],
         });
-        warn(warnings, `GPT ${name}`, "Only metadata extracted from list — navigate to editor for full config");
+        warn(warnings, `GPT ${name}`, "Only the name and description were read from the list. Open the GPT's editor to read its full setup.");
       }
     }
   } else {
@@ -373,7 +374,7 @@ async function extractInstructionsFromModal(
   }
 
   if (!threeDotFound) {
-    warn(warnings, "Project instructions", "Three-dot menu button not found — skipping instructions");
+    warn(warnings, "Project instructions", "Three-dot menu button not found, so the instructions were skipped");
     return "";
   }
 
@@ -410,7 +411,7 @@ async function extractInstructionsFromModal(
       key: "Escape", code: "Escape", bubbles: true,
     }));
     await new Promise<void>((r) => setTimeout(r, 200));
-    warn(warnings, "Project instructions", '"Project settings" item not found in dropdown — skipping instructions');
+    warn(warnings, "Project instructions", '"Project settings" item not found in the menu, so the instructions were skipped');
     return "";
   }
 
@@ -467,6 +468,9 @@ async function extractInstructionsFromModal(
 
 // ─── File Blob Download ─────────────────────────────────────
 
+/** Files are passed around as base64 in runtime messages; keep them modest. */
+const MAX_DOWNLOAD_BYTES = 7_500_000;
+
 interface FileDownloadResult {
   contentRef?: string;
   fileName?: string;
@@ -504,7 +508,7 @@ async function downloadFileBlob(
     // Step 2: Get signed download URL
     console.log("[PortSmith] Fetching download URL for:", fileId);
     const dlResp = await fetch(
-      `/backend-api/files/download/${fileId}?gizmo_id=${gizmoId}`,
+      `/backend-api/files/download/${encodeURIComponent(fileId)}?gizmo_id=${encodeURIComponent(gizmoId)}`,
       { headers },
     );
     if (!dlResp.ok) return { success: false, error: `HTTP ${dlResp.status}` };
@@ -515,7 +519,7 @@ async function downloadFileBlob(
     let meta: { file_name?: string; mime_type?: string } = {};
     try {
       const metaResp = await fetch(
-        `/backend-api/files/${fileId}/simple?gizmo_id=${gizmoId}`,
+        `/backend-api/files/${encodeURIComponent(fileId)}/simple?gizmo_id=${encodeURIComponent(gizmoId)}`,
         { headers },
       );
       if (metaResp.ok) meta = (await metaResp.json()) as typeof meta;
@@ -531,7 +535,7 @@ async function downloadFileBlob(
     const arrayBuffer = await blobResp.arrayBuffer();
     const bytes = new Uint8Array(arrayBuffer);
 
-    if (bytes.length > 7_500_000) {
+    if (bytes.length > MAX_DOWNLOAD_BYTES) {
       return { success: false, error: `Too large (${(bytes.length / 1024 / 1024).toFixed(1)}MB)` };
     }
 
@@ -567,6 +571,7 @@ async function downloadFileBlobs(
   files: Array<{ id?: string; name: string; type: string; size: number }>,
   gizmoId: string,
   projectName: string,
+  warnings: ExtractionWarning[],
 ): Promise<Array<FileDownloadResult | null>> {
   const downloadable = files.filter((f) => f.id);
   if (downloadable.length === 0) return files.map(() => null);
@@ -581,6 +586,11 @@ async function downloadFileBlobs(
 
   const promises = files.map(async (f): Promise<FileDownloadResult | null> => {
     if (!f.id) return null;
+    if (typeof f.size === "number" && f.size > MAX_DOWNLOAD_BYTES) {
+      return {
+        error: `too large to copy (${(f.size / 1024 / 1024).toFixed(1)} MB)`,
+      };
+    }
 
     try {
       console.log(`[PortSmith] Downloading: ${f.name} (${f.id})`);
@@ -605,11 +615,11 @@ async function downloadFileBlobs(
             sizeBytes: result.sizeBytes,
           };
         } else {
-          console.log(`[PortSmith] Store failed: ${f.name} — ${storeResult?.error}`);
+          console.log(`[PortSmith] Store failed: ${f.name}: ${storeResult?.error}`);
           return { error: storeResult?.error ?? "Failed to store file" };
         }
       } else {
-        console.log(`[PortSmith] Download failed: ${f.name} — ${result.error}`);
+        console.log(`[PortSmith] Download failed: ${f.name}: ${result.error}`);
         return { error: result.error };
       }
     } catch (e) {
@@ -628,6 +638,15 @@ async function downloadFileBlobs(
   console.log(
     `[PortSmith] File downloads complete: ${succeeded} succeeded, ${failed} failed`,
   );
+  resolved.forEach((r, i) => {
+    if (r && !r.contentRef && r.error) {
+      warn(
+        warnings,
+        `Project "${projectName}"`,
+        `Couldn't copy "${files[i]?.name ?? "a file"}" (${r.error}); upload it by hand`,
+      );
+    }
+  });
 
   return resolved;
 }
@@ -653,7 +672,7 @@ async function extractSingleProject(
       const apiResult: GizmoAPIResponse = await sendMessage("FETCH_GIZMO_API", { gizmoId });
 
       if (apiResult.error) {
-        warn(warnings, `Project "${sidebarName ?? gizmoId}"`, `API error: ${apiResult.error} — falling back to DOM`);
+        warn(warnings, `Project "${sidebarName ?? gizmoId}"`, `API error (${apiResult.error}); reading the page instead`);
       } else {
         const gizmo = apiResult.gizmo;
         const instructions = gizmo?.instructions ?? "";
@@ -663,7 +682,7 @@ async function extractSingleProject(
         const knowledgeFileNames = apiFiles.map((f) => f.name);
 
         // Download file blobs in parallel (non-blocking — failures fall back to manual)
-        const downloadResults = await downloadFileBlobs(apiFiles, gizmoId, name);
+        const downloadResults = await downloadFileBlobs(apiFiles, gizmoId, name, warnings);
 
         const knowledgeFileMetadata: ExtractedFileMetadata[] = apiFiles.map(
           (f, i) => {
@@ -690,14 +709,45 @@ async function extractSingleProject(
       }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      warn(warnings, `Project "${sidebarName ?? gizmoId}"`, `API call failed: ${errMsg} — falling back to DOM`);
+      warn(warnings, `Project "${sidebarName ?? gizmoId}"`, `API call failed (${errMsg}); reading the page instead`);
     }
   }
 
   // ── DOM fallback path (original extractSingleProject logic) ─
+  // Only read the page when it is this project's page. Otherwise the
+  // fallback would read (and click through) whatever page is open and
+  // attribute it to the wrong project.
+  if (gizmoId) {
+    const bareId = normalizeGizmoId(gizmoId);
+    // The project's own page (/g/<id>-<slug>/project), not a chat inside it
+    const onThisProject =
+      bareId !== null &&
+      new RegExp(`^/g/${bareId.replace(/[^\w-]/g, "")}(?:-[^/]*)?/project/?$`, "i").test(
+        window.location.pathname,
+      );
+    if (!onThisProject) {
+      warn(
+        warnings,
+        `Project "${sidebarName ?? gizmoId}"`,
+        "Couldn't read this project's settings. Open the project in ChatGPT and read your data again, or add its instructions in the editor.",
+      );
+      return sidebarName
+        ? {
+            id: bareId ?? gizmoId,
+            name: sidebarName,
+            description: "",
+            instructions: "",
+            knowledgeFileNames: [],
+            conversationCount: 0,
+            incomplete: true,
+          }
+        : null;
+    }
+  }
+
   const name = await readTextAsync(PROJECT_PAGE.name, "Project name", warnings);
   if (!name) {
-    warn(warnings, "Project extraction", "Could not find project name — page may not be loaded");
+    warn(warnings, "Project extraction", "Could not find the project name. The page may not be loaded yet.");
     return null;
   }
 
@@ -752,17 +802,18 @@ export async function extractProjects(): Promise<ProjectExtractionResult> {
   const sidebarLinks = resolveAllElements(PROJECT_SIDEBAR.projectLinks);
   console.log("[PortSmith] extractProjects sidebarLinks count:", sidebarLinks.length);
   if (sidebarLinks.length === 0) {
-    warn(warnings, "Projects", "No project links found in sidebar — sidebar may be collapsed or no projects exist");
+    warn(warnings, "Projects", "No project links found in the sidebar. The sidebar may be collapsed, or there are no projects.");
   }
 
   // Extract each project via the gizmo API (no navigation needed)
+  const seen = new Set<string>();
   for (const link of sidebarLinks) {
     const href = link.getAttribute("href") ?? "";
-    // Accept any gizmo ID format (g-p-xxx, g-xxx, etc.)
+    // Accept any gizmo ID format (g-p-xxx, g-xxx, etc.) without the slug
     const idMatch = href.match(/\/g\/([^/]+)\/project/);
-    const gizmoId = idMatch?.[1] ?? "";
-    console.log(`[PortSmith] extractProjects href: "${href}" → gizmoId: "${gizmoId}"`);
-    if (!gizmoId) continue;
+    const gizmoId = idMatch?.[1] ? normalizeGizmoId(idMatch[1]) : null;
+    if (!gizmoId || seen.has(gizmoId)) continue;
+    seen.add(gizmoId);
 
     const name = link.textContent?.trim() ?? "Unknown Project";
     const project = await extractSingleProject(warnings, gizmoId, name);
@@ -800,7 +851,7 @@ export async function extractMemory(): Promise<MemoryExtractionResult> {
     warn(
       warnings,
       "memory",
-      "Memory list container not found — ensure Settings > Personalization > Memory is open",
+      "Memory list not found. Open Settings > Personalization > Memory, then try again.",
     );
     return { success: false, items: [], warnings };
   }
@@ -810,7 +861,7 @@ export async function extractMemory(): Promise<MemoryExtractionResult> {
   const items: ExtractedMemoryItem[] = [];
 
   if (itemElements.length === 0) {
-    warn(warnings, "memory", "No memory items found — memory may be empty or list not loaded");
+    warn(warnings, "memory", "No memory items found. Memory may be empty, or the list hasn't loaded.");
     return { success: true, items: [], warnings };
   }
 
@@ -858,7 +909,7 @@ export async function extractCustomInstructions(): Promise<CustomInstructionsExt
     warn(
       warnings,
       "custom instructions",
-      "Neither text field found — ensure Custom Instructions panel is open",
+      "Custom instructions fields not found. Open the Custom instructions panel, then try again.",
     );
     return { success: false, instructions: null, warnings };
   }
@@ -887,13 +938,14 @@ export function scanSidebar(): SidebarScanResult {
   console.log(
     `[PortSmith] scanSidebar: ${projectLinks.length} project links found`,
   );
+  const seenProjects = new Set<string>();
   for (const link of projectLinks) {
     const href = link.getAttribute("href") ?? "";
-    // Extract gizmo ID from /g/<id>/project — accept any ID format
+    // Extract gizmo ID from /g/<id>/project and drop the readable slug
     const idMatch = href.match(/\/g\/([^/]+)\/project/);
-    const id = idMatch?.[1] ?? "";
-    console.log(`[PortSmith] scanSidebar project href: "${href}" → id: "${id}"`);
-    if (!id) continue;
+    const id = idMatch?.[1] ? normalizeGizmoId(idMatch[1]) : null;
+    if (!id || seenProjects.has(id)) continue;
+    seenProjects.add(id);
 
     const name = link.textContent?.trim() ?? "Unknown Project";
     const url = href.startsWith("http") ? href : `https://chatgpt.com${href}`;
@@ -907,14 +959,20 @@ export function scanSidebar(): SidebarScanResult {
   console.log(
     `[PortSmith] scanSidebar: ${gptLinks.length} GPT links found`,
   );
+  const seenGpts = new Set<string>();
   for (const link of gptLinks) {
     const href = link.getAttribute("href") ?? "";
+    // Project pages and chats inside projects/GPTs also live under /g/;
+    // they are not GPT entries.
+    if (/\/g\/g-p-/.test(href) || /\/c\//.test(href)) continue;
     // Extract GPT ID (g-xxx) from /g/<id>
     // Also handle legacy /gpts/editor/<id> URLs
     const sidebarMatch = href.match(/\/g\/(g-[^/]+)/);
     const editorMatch = href.match(/\/gpts\/editor\/([^/?]+)/);
-    const id = sidebarMatch?.[1] ?? editorMatch?.[1] ?? "";
-    if (!id) continue;
+    const raw = sidebarMatch?.[1] ?? editorMatch?.[1] ?? "";
+    const id = raw ? normalizeGizmoId(raw) : null;
+    if (!id || seenGpts.has(id)) continue;
+    seenGpts.add(id);
 
     const name = link.textContent?.trim() ?? "Unknown GPT";
     const url = href.startsWith("http") ? href : `https://chatgpt.com${href}`;
@@ -1005,6 +1063,29 @@ function handleExtractRequest(target: string): void {
       sendMessage("EXTRACT_PROGRESS", { step: `Finished ${target}`, percent: 100 }).catch(() => {});
     } catch (err) {
       console.error("[PortSmith] Extraction error:", err);
+      // Always answer, so the side panel doesn't sit out its timeout.
+      const warnings = [
+        {
+          context: target,
+          message: `Reading ${target.replace(/_/g, " ")} failed: ${err instanceof Error ? err.message : String(err)}`,
+        },
+      ];
+      const failed = (() => {
+        switch (target) {
+          case "custom_gpts":
+            return { type: "custom_gpts" as const, data: { success: false, gpts: [], warnings } };
+          case "projects":
+            return { type: "projects" as const, data: { success: false, projects: [], warnings } };
+          case "memory":
+            return { type: "memory" as const, data: { success: false, items: [], warnings } };
+          default:
+            return {
+              type: "custom_instructions" as const,
+              data: { success: false, instructions: null, warnings },
+            };
+        }
+      })();
+      sendMessage("DOM_EXTRACT_RESULT", failed).catch(() => {});
     }
   };
 
@@ -1014,14 +1095,9 @@ function handleExtractRequest(target: string): void {
 // ─── Init ───────────────────────────────────────────────────
 
 function init(): void {
-  // Guard against duplicate init when script is re-injected programmatically
-  const win = window as unknown as Record<string, unknown>;
-  if (win.__portsmith_cs_initialized__) {
-    console.log("[PortSmith] Content script already initialized — skipping duplicate init");
-    return;
-  }
-  win.__portsmith_cs_initialized__ = true;
-
+  // Re-injection (e.g. after an extension update) must re-register
+  // handlers, so there is no "already initialized" early return: handler
+  // registration and initMessageRouter() are both idempotent.
   console.log("[PortSmith] Content script injected on ChatGPT");
 
   initMessageRouter();

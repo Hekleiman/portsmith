@@ -2,35 +2,105 @@
 // Converts extracted Claude Projects into a PortsmithManifest.
 // Follows the same pattern as gemini-manifest.ts.
 
-import type { PortsmithManifest, Workspace } from "@/core/schema/types";
-import type { ExtractedClaudeProject } from "@/core/adapters/claude-dom-types";
+import type {
+  KnowledgeFile,
+  PortsmithManifest,
+  ProjectMemory,
+  Workspace,
+} from "@/core/schema/types";
+import type {
+  ClaudeExtractionResult,
+  ExtractedClaudeProject,
+} from "@/core/adapters/claude-dom-types";
+import { MANIFEST_VERSION, GENERATED_BY } from "@/shared/constants";
+import { getMimeType } from "./file-compatibility";
+import { categorize } from "./categorize";
 
-// ─── Category Detection (shared logic) ──────────────────────
+// ─── Knowledge ──────────────────────────────────────────────
 
-const CATEGORY_PATTERNS: Array<{ category: Workspace["category"]; re: RegExp }> = [
-  { category: "coding", re: /\b(code|program|debug|develop|software|api|typescript|python|javascript)\b/i },
-  { category: "writing", re: /\b(writ|blog|article|essay|copy|edit|proofread|draft)\b/i },
-  { category: "research", re: /\b(research|analyz|investigat|study|explor|paper)\b/i },
-  { category: "data_analysis", re: /\b(data|statistic|chart|csv|excel|dashboard)\b/i },
-  { category: "creative", re: /\b(creat|design|art|story|fiction|brainstorm)\b/i },
-  { category: "business", re: /\b(business|strateg|marketing|sales|finance)\b/i },
-  { category: "education", re: /\b(teach|tutor|learn|explain|lesson|student)\b/i },
-  { category: "personal", re: /\b(personal|life|health|fitness|recipe|travel)\b/i },
-  { category: "customer_support", re: /\b(support|customer|help\s*desk|ticket|faq)\b/i },
-];
+function buildKnowledgeFiles(project: ExtractedClaudeProject): KnowledgeFile[] {
+  const files: KnowledgeFile[] = [];
 
-function categorize(name: string, instructions: string): Workspace["category"] {
-  const text = `${name} ${instructions}`;
-  for (const { category, re } of CATEGORY_PATTERNS) {
-    if (re.test(text)) return category;
+  for (const doc of project.docs ?? []) {
+    const copied = !!doc.contentRef;
+    files.push({
+      id: `kf-doc-${doc.uuid}`,
+      originalName: doc.fileName,
+      mimeType: doc.mimeType,
+      sizeBytes: doc.sizeBytes,
+      source: copied ? "exported" : "referenced",
+      ...(copied ? { contentRef: doc.contentRef } : {}),
+      compatible: copied,
+      ...(copied
+        ? {}
+        : { conversionNeeded: "Copy this document from the Claude project by hand" }),
+    });
   }
-  return "other";
+
+  for (const file of project.files ?? []) {
+    files.push({
+      id: `kf-file-${file.uuid}`,
+      originalName: file.fileName,
+      mimeType: getMimeType(file.fileName),
+      sizeBytes: 0,
+      source: "referenced",
+      compatible: false,
+      conversionNeeded:
+        "Download this file from the Claude project and upload it by hand",
+    });
+  }
+
+  return files;
+}
+
+function buildProjectMemory(
+  project: ExtractedClaudeProject,
+  capturedAt: string,
+): ProjectMemory | undefined {
+  if (!project.memory || project.memory.length === 0) return undefined;
+  return {
+    source:
+      project.memorySource === "summary"
+        ? "claude_memory_summary"
+        : "claude_memory",
+    capturedAt,
+    entries: project.memory.map((m, i) => ({
+      id: `pm-${i + 1}`,
+      title: m.title,
+      ...(m.summary ? { summary: m.summary } : {}),
+      content: m.body,
+      ...(m.updatedAt ? { updatedAt: m.updatedAt } : {}),
+    })),
+  };
 }
 
 // ─── Workspace Builder ──────────────────────────────────────
 
-function buildWorkspaceFromProject(project: ExtractedClaudeProject): Workspace {
-  const now = new Date().toISOString();
+function toIsoOrNow(value: string, now: string): string {
+  return value && !Number.isNaN(Date.parse(value))
+    ? new Date(value).toISOString()
+    : now;
+}
+
+export function buildWorkspaceFromProject(
+  project: ExtractedClaudeProject,
+  now: string = new Date().toISOString(),
+): Workspace {
+  const knowledgeFiles = buildKnowledgeFiles(project);
+  const projectMemory = buildProjectMemory(project, now);
+
+  const warnings: string[] = [];
+  const manualSteps: string[] = [];
+  const referenced = knowledgeFiles.filter((f) => !f.compatible);
+  if (referenced.length > 0) {
+    warnings.push(
+      `${referenced.length} file(s) can't be copied automatically and need to be re-uploaded by hand`,
+    );
+    manualSteps.push(`Re-upload ${referenced.length} file(s) from the Claude project`);
+  }
+  if (!project.instructions.trim()) {
+    warnings.push("This project has no instructions");
+  }
 
   return {
     id: `ws-claude-${project.id}`,
@@ -38,19 +108,20 @@ function buildWorkspaceFromProject(project: ExtractedClaudeProject): Workspace {
     name: project.name,
     description: project.description,
     instructions: { raw: project.instructions },
-    knowledgeFiles: [],
+    knowledgeFiles,
     category: categorize(project.name, project.instructions),
     tags: ["claude-project"],
     behavior: {},
     capabilities: [],
     conversationCount: 0,
-    lastActiveAt: project.updatedAt || now,
+    lastActiveAt: toIsoOrNow(project.updatedAt, now),
     sampleTopics: [],
     migration: {
-      confidence: 0.95,
-      warnings: [],
-      manualStepsRequired: [],
+      confidence: referenced.length > 0 ? 0.85 : 0.95,
+      warnings,
+      manualStepsRequired: manualSteps,
     },
+    ...(projectMemory ? { projectMemory } : {}),
   };
 }
 
@@ -58,13 +129,14 @@ function buildWorkspaceFromProject(project: ExtractedClaudeProject): Workspace {
 
 export function generateClaudeManifest(
   projects: ExtractedClaudeProject[],
+  extractionWarnings: ClaudeExtractionResult["warnings"] = [],
 ): PortsmithManifest {
   const now = new Date().toISOString();
 
-  const workspaces = projects.map(buildWorkspaceFromProject);
+  const workspaces = projects.map((p) => buildWorkspaceFromProject(p, now));
 
   return {
-    version: "0.1.0",
+    version: MANIFEST_VERSION,
     exportedAt: now,
     source: {
       platform: "claude",
@@ -84,7 +156,10 @@ export function generateClaudeManifest(
     memory: [],
     globalInstructions: "",
     metadata: {
-      generatedBy: "portsmith/0.1.0",
+      generatedBy: GENERATED_BY,
+      ...(extractionWarnings.length > 0
+        ? { extractionWarnings: extractionWarnings.map((w) => w.message) }
+        : {}),
     },
   };
 }

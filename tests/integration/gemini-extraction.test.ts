@@ -1,3 +1,4 @@
+import { APP_VERSION } from "@/shared/constants";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // ─── Mocks ──────────────────────────────────────────────────
@@ -66,13 +67,10 @@ function makeGemListResponse(gems: unknown[][]): string {
 // ─── Tests ──────────────────────────────────────────────────
 
 describe("extractGems", () => {
-  let fetchCallCount: number;
-
   beforeEach(() => {
     vi.restoreAllMocks();
     // Re-stub chrome since restoreAllMocks might clear stubs
     vi.stubGlobal("chrome", mockChrome);
-    fetchCallCount = 0;
   });
 
   function setupFetch(
@@ -85,7 +83,6 @@ describe("extractGems", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string | URL | Request) => {
-        fetchCallCount++;
         const urlStr = typeof url === "string" ? url : url.toString();
 
         if (urlStr.includes("/app")) {
@@ -442,6 +439,6 @@ describe("generateGeminiManifest", () => {
 
   it("sets metadata generatedBy", () => {
     const manifest = generateGeminiManifest(sampleGems);
-    expect(manifest.metadata.generatedBy).toBe("portsmith/0.1.0");
+    expect(manifest.metadata.generatedBy).toBe(`portsmith/${APP_VERSION}`);
   });
 });

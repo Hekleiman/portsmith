@@ -10,34 +10,11 @@ const METHODS: {
   icon: React.ReactNode;
 }[] = [
   {
-    id: "upload",
-    title: "Upload a backup file",
-    description:
-      "Download a copy of your ChatGPT data, then upload it here. Takes about 5 minutes — we'll walk you through it.",
-    icon: (
-      <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-violet-100">
-        <svg
-          className="h-5 w-5 text-violet-600"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
-          <polyline points="17 8 12 3 7 8" />
-          <line x1="12" y1="3" x2="12" y2="15" />
-        </svg>
-      </div>
-    ),
-  },
-  {
     id: "browser",
     title: "Read from your ChatGPT account",
     description:
-      "Already logged into ChatGPT in this browser? We can read your projects and settings directly. No download needed.",
-    badge: "Quickest",
+      "Reads your projects, custom GPTs, files, memory and custom instructions from ChatGPT in this browser. Keep the ChatGPT sidebar open.",
+    badge: "Recommended",
     icon: (
       <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-sky-100">
         <svg
@@ -58,10 +35,10 @@ const METHODS: {
   },
   {
     id: "both",
-    title: "Both (recommended)",
+    title: "Account + ChatGPT data export",
     description:
-      "Upload your backup file AND read from your account. This gives the most complete picture of your ChatGPT setup.",
-    badge: "Most Complete",
+      "Also adds conversation titles from your ChatGPT data export (Settings, Data controls, Export). The export email can take up to a day to arrive.",
+    badge: "Extra context",
     icon: (
       <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-100">
         <svg
@@ -90,8 +67,9 @@ export default function ExtractionMethod(): React.JSX.Element {
         <h2 className="text-lg font-semibold text-gray-900">
           How should we get your stuff?
         </h2>
-        <p className="mt-1 text-sm text-gray-500">
-          Pick the way that works best for you.
+        <p className="mt-1 text-sm text-gray-600">
+          GPT and project settings only come from your account. A data export
+          adds conversation history context on top.
         </p>
       </div>
       <div className="flex flex-col gap-2">

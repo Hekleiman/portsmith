@@ -21,7 +21,7 @@ export const PlatformIdentifierSchema = z.object({
     "api",
     "manual",
   ]),
-  exportedAt: z.string().datetime(),
+  exportedAt: z.string().datetime({ offset: true }),
 });
 
 export type PlatformIdentifier = z.infer<typeof PlatformIdentifierSchema>;
@@ -118,6 +118,29 @@ export const MemoryItemSchema = z.object({
 
 export type MemoryItem = z.infer<typeof MemoryItemSchema>;
 
+// ─── Project Memory ─────────────────────────────────────────
+// What the source assistant remembered from chats inside one project.
+// Claude exposes this as individual memory files; other sources are
+// captured manually (for example, by asking the assistant to summarize).
+
+export const ProjectMemoryEntrySchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  summary: z.string().optional(),
+  content: z.string(),
+  updatedAt: z.string().optional(),
+});
+
+export type ProjectMemoryEntry = z.infer<typeof ProjectMemoryEntrySchema>;
+
+export const ProjectMemorySchema = z.object({
+  source: z.enum(["claude_memory", "claude_memory_summary", "manual"]),
+  capturedAt: z.string(),
+  entries: z.array(ProjectMemoryEntrySchema),
+});
+
+export type ProjectMemory = z.infer<typeof ProjectMemorySchema>;
+
 // ─── Workspace ──────────────────────────────────────────────
 
 export const WorkspaceBehaviorSchema = z.object({
@@ -167,9 +190,10 @@ export const WorkspaceSchema = z.object({
   behavior: WorkspaceBehaviorSchema,
   capabilities: z.array(WorkspaceCapabilitySchema),
   conversationCount: z.number().int().nonnegative(),
-  lastActiveAt: z.string().datetime(),
+  lastActiveAt: z.string().datetime({ offset: true }),
   sampleTopics: z.array(z.string()),
   migration: WorkspaceMigrationSchema,
+  projectMemory: ProjectMemorySchema.optional(),
 });
 
 export type Workspace = z.infer<typeof WorkspaceSchema>;
@@ -179,7 +203,7 @@ export type Workspace = z.infer<typeof WorkspaceSchema>;
 export const ConversationSummarySchema = z.object({
   id: z.string(),
   title: z.string(),
-  date: z.string().datetime(),
+  date: z.string().datetime({ offset: true }),
   workspaceId: z.string().optional(),
   topics: z.array(z.string()),
   keyDecisions: z.array(z.string()),
@@ -194,13 +218,15 @@ export type ConversationSummary = z.infer<typeof ConversationSummarySchema>;
 export const ManifestMetadataSchema = z.object({
   taskId: z.string().optional(),
   generatedBy: z.string(),
+  /** Non-fatal problems found while extracting, shown on the Review page. */
+  extractionWarnings: z.array(z.string()).optional(),
 });
 
 export type ManifestMetadata = z.infer<typeof ManifestMetadataSchema>;
 
 export const PortsmithManifestSchema = z.object({
   version: z.string(),
-  exportedAt: z.string().datetime(),
+  exportedAt: z.string().datetime({ offset: true }),
   source: PlatformIdentifierSchema,
   user: UserProfileSchema,
   workspaces: z.array(WorkspaceSchema),

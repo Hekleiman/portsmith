@@ -34,6 +34,8 @@ export interface ExtractedChatGPTProject {
   /** Rich file metadata from API (when available). */
   knowledgeFileMetadata?: ExtractedFileMetadata[];
   conversationCount: number;
+  /** True when only the name could be read (settings and files are missing). */
+  incomplete?: boolean;
 }
 
 export interface ExtractedMemoryItem {

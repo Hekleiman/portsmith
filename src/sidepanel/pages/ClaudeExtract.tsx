@@ -1,12 +1,13 @@
 // ─── Claude Extraction Page ─────────────────────────────────
-// Extracts Projects from the user's Claude account via the
-// internal API (CLAUDE_EXTRACT_PROJECTS message to content script).
+// Extracts Projects (instructions, knowledge docs and project memory) from
+// the user's Claude account via the internal API
+// (CLAUDE_EXTRACT_PROJECTS message to the content script).
 
 import { useState, useCallback, useEffect } from "react";
 import { useMigrationStore } from "../store/migration-store";
 import { generateClaudeManifest } from "@/core/transform/claude-manifest";
 import { saveManifest } from "@/core/storage/indexed-db";
-import { safeSendTabMessage } from "@/shared/messaging";
+import { onMessage, safeSendTabMessage } from "@/shared/messaging";
 import type { TrackedStep } from "../components/ProgressTracker";
 import ProgressTracker from "../components/ProgressTracker";
 
@@ -14,7 +15,17 @@ import ProgressTracker from "../components/ProgressTracker";
 
 type TabStatus = "checking" | "ready" | "not_found" | "not_responding";
 
-async function findClaudeTab(): Promise<number> {
+async function findClaudeTab(preferred: number | null): Promise<number> {
+  if (preferred !== null) {
+    try {
+      const tab = await chrome.tabs.get(preferred);
+      if (tab.id !== undefined && /^https:\/\/claude\.ai\//.test(tab.url ?? "")) {
+        return tab.id;
+      }
+    } catch {
+      // Tab closed since the check; fall back to any Claude tab
+    }
+  }
   const tabs = await chrome.tabs.query({
     url: "https://claude.ai/*",
   });
@@ -46,6 +57,12 @@ export default function ClaudeExtract(): React.JSX.Element {
   // Tab status
   const [tabStatus, setTabStatus] = useState<TabStatus>("checking");
   const [tabLocation, setTabLocation] = useState("");
+  const [readyTabId, setReadyTabId] = useState<number | null>(null);
+
+  // What to include
+  const [includeMemory, setIncludeMemory] = useState(true);
+  const [includeKnowledge, setIncludeKnowledge] = useState(true);
+  const [progressText, setProgressText] = useState<string | null>(null);
 
   const markStep = useCallback(
     (index: number, status: TrackedStep["status"], detail?: string) => {
@@ -92,6 +109,7 @@ export default function ClaudeExtract(): React.JSX.Element {
         const response = await safeSendTabMessage(bestTab.id, "PING");
         if (response?.pong) {
           setTabStatus("ready");
+          setReadyTabId(bestTab.id);
           if (bestTab.windowId !== currentWindow.id) {
             setTabLocation("in another window");
           } else if (!bestTab.active) {
@@ -125,14 +143,19 @@ export default function ClaudeExtract(): React.JSX.Element {
       { id: "manifest", label: "Putting it all together...", status: "pending" },
     ]);
 
+    const stopProgress = onMessage("EXTRACT_PROGRESS", (payload) => {
+      setProgressText(payload.step);
+    });
+
     try {
-      const tabId = await findClaudeTab();
+      const tabId = await findClaudeTab(readyTabId);
 
       // Step 1: Extract projects
       markStep(0, "active");
       const result = await safeSendTabMessage(
         tabId,
         "CLAUDE_EXTRACT_PROJECTS",
+        { includeMemory, includeKnowledge },
       );
 
       if (!result.success && result.projects.length === 0) {
@@ -141,15 +164,23 @@ export default function ClaudeExtract(): React.JSX.Element {
       }
 
       const projectCount = result.projects.length;
-      markStep(
+      const memoryCount = result.projects.filter(
+        (p) => (p.memory?.length ?? 0) > 0,
+      ).length;
+      const docCount = result.projects.reduce(
+        (sum, p) => sum + (p.docs?.length ?? 0),
         0,
-        "complete",
-        `Found ${projectCount} Project${projectCount === 1 ? "" : "s"}`,
       );
+      const details = [
+        `${projectCount} project${projectCount === 1 ? "" : "s"}`,
+        ...(includeMemory ? [`${memoryCount} with memory`] : []),
+        ...(includeKnowledge ? [`${docCount} knowledge doc${docCount === 1 ? "" : "s"}`] : []),
+      ];
+      markStep(0, "complete", `Found ${details.join(", ")}`);
 
       // Step 2: Generate manifest
       markStep(1, "active");
-      const manifest = generateClaudeManifest(result.projects);
+      const manifest = generateClaudeManifest(result.projects, result.warnings);
 
       const manifestId = `manifest-${Date.now()}`;
       await saveManifest(manifestId, manifest);
@@ -161,8 +192,11 @@ export default function ClaudeExtract(): React.JSX.Element {
       const msg = err instanceof Error ? err.message : String(err);
       setError(msg);
       setPhase("error");
+    } finally {
+      stopProgress();
+      setProgressText(null);
     }
-  }, [markStep, setManifestId]);
+  }, [markStep, setManifestId, readyTabId, includeMemory, includeKnowledge]);
 
   // ─── Auto-advance ───────────────────────────────────────
 
@@ -182,8 +216,45 @@ export default function ClaudeExtract(): React.JSX.Element {
           Reading from your Claude account
         </h2>
         <p className="mt-1 text-sm text-gray-500">
-          We'll fetch your Projects from Claude via its internal API.
+          PortSmith reads your Projects from your Claude account in this
+          browser. Nothing is sent anywhere else.
         </p>
+
+        <fieldset className="mt-4 space-y-2 rounded-lg border border-gray-200 p-3">
+          <legend className="px-1 text-xs font-medium text-gray-600">
+            Include
+          </legend>
+          <label className="flex items-start gap-2 text-sm text-gray-700">
+            <input
+              type="checkbox"
+              className="mt-0.5 h-4 w-4 rounded border-gray-300"
+              checked={includeMemory}
+              onChange={(e) => setIncludeMemory(e.target.checked)}
+            />
+            <span>
+              Project memory
+              <span className="block text-xs text-gray-500">
+                What Claude remembers from chats in each project. You can
+                review it before anything is moved.
+              </span>
+            </span>
+          </label>
+          <label className="flex items-start gap-2 text-sm text-gray-700">
+            <input
+              type="checkbox"
+              className="mt-0.5 h-4 w-4 rounded border-gray-300"
+              checked={includeKnowledge}
+              onChange={(e) => setIncludeKnowledge(e.target.checked)}
+            />
+            <span>
+              Knowledge documents
+              <span className="block text-xs text-gray-500">
+                Text documents in each project. Uploaded images and PDFs
+                are listed so you can move them by hand.
+              </span>
+            </span>
+          </label>
+        </fieldset>
 
         <div className="mt-4">
           {tabStatus === "checking" && (
@@ -228,7 +299,7 @@ export default function ClaudeExtract(): React.JSX.Element {
               </svg>
               <span>
                 {tabLocation
-                  ? `Found Claude ${tabLocation} — ready to go`
+                  ? `Found Claude ${tabLocation}. Ready to go.`
                   : "Claude is open and ready"}
               </span>
             </div>
@@ -256,7 +327,7 @@ export default function ClaudeExtract(): React.JSX.Element {
                   onClick={() => void checkForClaude()}
                   className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-50"
                 >
-                  I already opened it — check again
+                  I already opened it, check again
                 </button>
               </div>
               <p className="mt-2 text-xs text-amber-600">
@@ -305,6 +376,9 @@ export default function ClaudeExtract(): React.JSX.Element {
     if (error?.includes("No Claude tab found")) {
       friendlyError =
         "We couldn't find Claude open in any of your tabs. Please open claude.ai, sign in, then try again.";
+    } else if (error?.includes("Timed out")) {
+      friendlyError =
+        "Reading your projects took too long. Check your connection, reload the Claude tab, and try again (or turn off project memory to speed it up).";
     } else if (error?.includes("no organization ID")) {
       friendlyError =
         "Couldn't authenticate with Claude. Please make sure you're logged in to claude.ai, then try again.";
@@ -382,8 +456,13 @@ export default function ClaudeExtract(): React.JSX.Element {
         Reading your Claude Projects
       </h2>
       <p className="mt-1 text-sm text-gray-500">
-        Please keep this panel open — this will only take a moment.
+        Please keep this panel open. Large accounts can take a minute.
       </p>
+      {progressText && (
+        <p className="mt-2 text-xs text-gray-500" role="status" aria-live="polite">
+          {progressText}
+        </p>
+      )}
       <div className="mt-4">
         <ProgressTracker steps={steps} startedAt={startedAt} />
       </div>

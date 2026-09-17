@@ -1,4 +1,14 @@
 import type { Workspace, MemoryItem } from "@/core/schema/types";
+import type { MigrationStepFallback } from "@/shared/messaging";
+import { getInstructionsForTarget } from "@/core/platforms";
+import {
+  hasProjectMemory,
+  projectMemoryEntryCount,
+  projectMemoryFileName,
+  renderProjectMemoryMarkdown,
+} from "@/core/transform/project-memory";
+import { renderMemoryImportText } from "@/core/transform/memory-export";
+import { buildDownloads } from "./manual-fallback";
 
 // ─── Guided Mode Types ──────────────────────────────────────
 
@@ -7,16 +17,8 @@ export interface CopyBlockData {
   content: string;
 }
 
-export interface ImportStep {
-  id: string;
-  title: string;
-  description: string;
-  copyBlocks: CopyBlockData[];
-  fileNames?: string[];
-  link?: string;
-  actionHint?: string;
-  stepNumber?: number;
-}
+/** A guided step. Same shape the orchestrator sends to the side panel. */
+export type ImportStep = MigrationStepFallback;
 
 export interface ImportInstructions {
   workspaceId: string;
@@ -32,11 +34,13 @@ export interface ImportInstructions {
  *
  * Claude uses a two-phase creation flow:
  *   Phase 1 (creation page): Name + Description + "Create project"
- *   Phase 2 (project dashboard): Instructions + Files + Verify
+ *   Phase 2 (project dashboard): Instructions + Files + Memory + Verify
  */
-export function generateInstructions(workspace: Workspace): ImportInstructions {
-  const translatedInstructions =
-    workspace.instructions.translated?.claude ?? workspace.instructions.raw;
+export function generateInstructions(
+  workspace: Workspace,
+  sourceLabel = "your previous assistant",
+): ImportInstructions {
+  const translatedInstructions = getInstructionsForTarget(workspace, "claude");
 
   // Use workspace name as fallback if description is empty
   const description =
@@ -94,7 +98,7 @@ export function generateInstructions(workspace: Workspace): ImportInstructions {
     id: `${workspace.id}-save`,
     title: 'Click "Create project"',
     description:
-      'Click the "Create project" button at the bottom of the form. You\'ll be redirected to your new project\'s page \u2014 this may take a few seconds.',
+      "Click the \"Create project\" button at the bottom of the form. You'll be redirected to your new project's page, which may take a few seconds.",
     copyBlocks: [],
     actionHint: 'Click "Create project" and wait for redirect',
     stepNumber: stepNum++,
@@ -107,9 +111,9 @@ export function generateInstructions(workspace: Workspace): ImportInstructions {
       id: `${workspace.id}-open-instructions`,
       title: "Open the instructions editor",
       description:
-        'On your new project\'s page, find the "Instructions" section. Click the "+" button or "Add content" next to it to open the instructions editor.',
+        'On your new project\'s page, find the "Instructions" section and click it (or its pencil icon) to open the instructions editor.',
       copyBlocks: [],
-      actionHint: 'Find "Instructions" and click "+" to add',
+      actionHint: 'Find "Instructions" and open the editor',
       stepNumber: stepNum++,
     });
 
@@ -128,14 +132,15 @@ export function generateInstructions(workspace: Workspace): ImportInstructions {
       id: `${workspace.id}-save-instructions`,
       title: "Save the instructions",
       description:
-        'Click the "Save" button to save your project instructions.',
+        'Click the "Save instructions" button to save your project instructions.',
       copyBlocks: [],
-      actionHint: 'Click "Save"',
+      actionHint: 'Click "Save instructions"',
       stepNumber: stepNum++,
     });
   }
 
-  // Knowledge files step — show if workspace has any files
+  // Knowledge files step: show if workspace has any files
+  const copiedFiles = workspace.knowledgeFiles.filter((f) => f.contentRef);
   const compatibleFiles = workspace.knowledgeFiles.filter((f) => f.compatible);
   const needsConversion = workspace.knowledgeFiles.filter(
     (f) => !f.compatible && f.conversionNeeded,
@@ -146,24 +151,26 @@ export function generateInstructions(workspace: Workspace): ImportInstructions {
 
   if (workspace.knowledgeFiles.length > 0) {
     let filesDescription =
-      'Your project has been created! Now add your files.\n\n';
+      'Now add your files. On the project page, click the "+" in the "Context" section (the project\'s files) and upload each file.';
 
-    if (compatibleFiles.length > 0) {
+    if (copiedFiles.length > 0) {
       filesDescription +=
-        'On your project page, look for a "Knowledge" section or an "Add content" button. Click it and upload the files listed below.\n\nIf you haven\'t downloaded these from ChatGPT yet, open your ChatGPT project in another tab and download each file first.';
+        "\n\nPortSmith copied the files below, so you can download them here first.";
+    } else if (compatibleFiles.length > 0) {
+      filesDescription += `\n\nDownload these files from ${sourceLabel} first if you don't have them.`;
     }
 
     if (needsConversion.length > 0) {
-      filesDescription += `\n\nThese files need to be converted first:`;
+      filesDescription += `\n\nThese files need attention first:`;
       for (const f of needsConversion) {
-        filesDescription += `\n\u2022 ${f.originalName} \u2014 ${f.conversionNeeded}`;
+        filesDescription += `\n• ${f.originalName}: ${f.conversionNeeded}`;
       }
     }
 
     if (unsupported.length > 0) {
       filesDescription += `\n\n${unsupported.length} file(s) can't be transferred (not supported by Claude):`;
       for (const f of unsupported) {
-        filesDescription += `\n\u2022 ${f.originalName}`;
+        filesDescription += `\n• ${f.originalName}`;
       }
     }
 
@@ -173,9 +180,34 @@ export function generateInstructions(workspace: Workspace): ImportInstructions {
       description: filesDescription,
       copyBlocks: [],
       fileNames: compatibleFiles.map((f) => f.originalName),
-      actionHint: compatibleFiles.length > 0
-        ? 'Upload your files, then click "Done" below'
-        : 'Convert files first, then upload and click "Done"',
+      downloads: buildDownloads({ ...workspace, projectMemory: undefined }, sourceLabel),
+      actionHint:
+        compatibleFiles.length > 0
+          ? 'Upload your files, then click "Mark as done"'
+          : 'Handle the files above, then click "Mark as done"',
+      stepNumber: stepNum++,
+    });
+  }
+
+  if (hasProjectMemory(workspace)) {
+    const content = renderProjectMemoryMarkdown(workspace, sourceLabel);
+    const count = projectMemoryEntryCount(workspace);
+    steps.push({
+      id: `${workspace.id}-project-memory`,
+      title: "Add the project memory",
+      description:
+        `${sourceLabel} remembered ${count} note${count === 1 ? "" : "s"} from chats in this project. ` +
+        'Add them to the project so Claude can use them: click the "+" in the project\'s "Context" section and either upload the downloaded file or add it as text content.',
+      copyBlocks: [{ label: "Project memory", content }],
+      downloads: [
+        {
+          label: "Project memory",
+          fileName: projectMemoryFileName(sourceLabel),
+          mimeType: "text/markdown",
+          content,
+        },
+      ],
+      actionHint: "Upload or paste the project memory",
       stepNumber: stepNum++,
     });
   }
@@ -198,37 +230,42 @@ export function generateInstructions(workspace: Workspace): ImportInstructions {
   };
 }
 
-/** Build guided-mode steps for adding memory items to Claude. */
+/**
+ * Guided steps for bringing global memory into Claude through
+ * Settings > Memory > "Start import" (Claude reads the pasted text and
+ * files it as memories).
+ */
 export function generateMemoryInstructions(
   items: MemoryItem[],
+  sourceLabel = "your previous assistant",
+  customInstructions = "",
 ): ImportStep[] {
-  if (items.length === 0) return [];
+  const block = renderMemoryImportText(items, sourceLabel, customInstructions);
+  if (!block) return [];
+  const what =
+    items.length > 0
+      ? `your ${items.length} memor${items.length === 1 ? "y" : "ies"}`
+      : "your custom instructions";
 
-  const steps: ImportStep[] = [
+  return [
     {
-      id: "memory-navigate",
-      title: "Go to Settings",
+      id: "memory-open-import",
+      title: "Open Claude's memory import",
       description:
-        'Open Claude Settings, then navigate to the "Memory" section to review and add memory items.',
+        'Open Claude, go to Settings, then "Memory". Next to "Import memory from other AI providers", click "Start import". ' +
+        "You can skip Claude's prompt step: PortSmith already has your memories.",
       copyBlocks: [],
       link: "https://claude.ai/settings",
+      actionHint: 'Settings → Memory → "Start import"',
+    },
+    {
+      id: "memory-paste",
+      title: `Paste ${what}`,
+      description:
+        'Paste the text below into the "Paste your memory details here" box and click "Add to memory". ' +
+        "Claude may take a while to process imports, and it may leave out details it considers unrelated.",
+      copyBlocks: [{ label: "Memories", content: block }],
+      actionHint: 'Paste, then click "Add to memory"',
     },
   ];
-
-  // Sort by priority descending so highest-priority items come first
-  const sorted = [...items].sort(
-    (a, b) => b.migration.priority - a.migration.priority,
-  );
-
-  for (const item of sorted) {
-    const content = item.migration.truncatedVersion ?? item.fact;
-    steps.push({
-      id: `memory-${item.id}`,
-      title: `Add memory: ${item.category}`,
-      description: `Add this ${item.category} fact to Claude's memory.`,
-      copyBlocks: [{ label: "Memory item", content }],
-    });
-  }
-
-  return steps;
 }

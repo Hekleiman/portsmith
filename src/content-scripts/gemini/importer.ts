@@ -207,7 +207,8 @@ export async function createGem(config: GemConfig): Promise<GemImportResult> {
 
   return {
     success: false,
-    error: "Gem may have been created but the response did not contain a Gem ID",
+    error: "Gemini's reply didn't include a Gem ID, so the Gem may or may not exist",
+    maybeCreated: true,
     fallback: buildCreateFallback(config),
   };
 }

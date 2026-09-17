@@ -11,6 +11,13 @@ import {
   onMessage,
 } from "@/shared/messaging";
 import type { SidebarItem } from "@/shared/messaging";
+import type {
+  CustomGPTExtractionResult,
+  CustomInstructionsExtractionResult,
+  ExtractionWarning,
+  MemoryExtractionResult,
+  ProjectExtractionResult,
+} from "@/core/adapters/chatgpt-dom-types";
 import type { RawChatGPTData } from "@/core/adapters/types";
 import type { ExtractionMethod } from "@/core/storage/migration-state";
 import type { TrackedStep } from "../components/ProgressTracker";
@@ -70,11 +77,57 @@ function buildSteps(method: ExtractionMethod): TrackedStep[] {
 // ─── DOM Helpers ─────────────────────────────────────────────
 
 const DOM_TIMEOUT_MS = 30_000;
+/** Projects download knowledge files, so they get a much longer budget. */
+const PROJECTS_TIMEOUT_MS = 180_000;
 
-async function findChatGPTTab(): Promise<number> {
-  const tabs = await chrome.tabs.query({
-    url: ["https://chatgpt.com/*", "https://chat.openai.com/*"],
+interface DomDataMap {
+  custom_gpts: CustomGPTExtractionResult;
+  projects: ProjectExtractionResult;
+  memory: MemoryExtractionResult;
+  custom_instructions: CustomInstructionsExtractionResult;
+}
+
+/**
+ * Ask the ChatGPT content script for one kind of data and wait for its
+ * DOM_EXTRACT_RESULT. Resolves null on timeout. Cleans up its listener and
+ * timer as soon as it settles.
+ */
+function requestDomExtraction<T extends keyof DomDataMap>(
+  tabId: number,
+  target: T,
+  timeoutMs: number,
+): Promise<DomDataMap[T] | null> {
+  return new Promise((resolve) => {
+    let settled = false;
+    // `timer` and `unsubscribe` are set before `finish` can run: messages
+    // and timeouts are always delivered asynchronously.
+    const finish = (value: DomDataMap[T] | null): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      unsubscribe();
+      resolve(value);
+    };
+    const unsubscribe = onMessage("DOM_EXTRACT_RESULT", (payload) => {
+      if (payload.type === target) finish(payload.data as unknown as DomDataMap[T]);
+    });
+    const timer = setTimeout(() => finish(null), timeoutMs);
+    safeSendTabMessage(tabId, "DOM_EXTRACT", { target }).catch(() => finish(null));
   });
+}
+
+async function findChatGPTTab(preferred: number | null): Promise<number> {
+  if (preferred !== null) {
+    try {
+      const tab = await chrome.tabs.get(preferred);
+      if (tab.id !== undefined && /^https:\/\/chatgpt\.com\//.test(tab.url ?? "")) {
+        return tab.id;
+      }
+    } catch {
+      // Closed since the check
+    }
+  }
+  const tabs = await chrome.tabs.query({ url: "https://chatgpt.com/*" });
   const tabId = tabs[0]?.id;
   if (tabId === undefined) {
     throw new Error(
@@ -107,7 +160,7 @@ function ChatGPTExtract(): React.JSX.Element {
   const nextStep = useMigrationStore((s) => s.nextStep);
   const setManifestId = useMigrationStore((s) => s.setManifestId);
 
-  const method: ExtractionMethod = extractionMethod ?? "upload";
+  const method: ExtractionMethod = extractionMethod ?? "browser";
 
   const [phase, setPhase] = useState<Phase>("idle");
   const [steps, setSteps] = useState<TrackedStep[]>(() => buildSteps(method));
@@ -117,7 +170,10 @@ function ChatGPTExtract(): React.JSX.Element {
   // Accumulated data (refs to avoid re-renders)
   const rawDataRef = useRef<RawChatGPTData | null>(null);
   const domDataRef = useRef<ChatGPTDOMData>({});
+  const warningsRef = useRef<string[]>([]);
   const runningRef = useRef(false);
+  const readyTabRef = useRef<number | null>(null);
+  const [progressText, setProgressText] = useState<string | null>(null);
 
   // ─── Step status helpers ─────────────────────────────────
 
@@ -148,6 +204,17 @@ function ChatGPTExtract(): React.JSX.Element {
       // Reset accumulated data
       rawDataRef.current = null;
       domDataRef.current = {};
+      warningsRef.current = [];
+
+      const addWarnings = (items: ExtractionWarning[] | undefined): void => {
+        for (const w of items ?? []) {
+          warningsRef.current.push(`${w.context}: ${w.message}`);
+        }
+      };
+
+      const stopProgress = onMessage("EXTRACT_PROGRESS", (payload) => {
+        setProgressText(payload.step);
+      });
 
       let stepIdx = 0;
 
@@ -159,13 +226,14 @@ function ChatGPTExtract(): React.JSX.Element {
           markStep(stepIdx, "active");
           const rawData = await parseChatGPTExport(file);
           rawDataRef.current = rawData;
+          for (const w of rawData.warnings) warningsRef.current.push(`export: ${w}`);
           markStep(stepIdx, "complete");
           stepIdx++;
         }
 
         // ── DOM extraction steps ─────────────────────────
         if (method === "browser" || method === "both") {
-          const tabId = await findChatGPTTab();
+          const tabId = await findChatGPTTab(readyTabRef.current);
 
           // 1. Scan sidebar for projects and GPTs
           markStep(stepIdx, "active");
@@ -174,10 +242,8 @@ function ChatGPTExtract(): React.JSX.Element {
             const scanResult = await safeSendTabMessage(tabId, "SCAN_SIDEBAR");
             projectTargets = scanResult.projects;
 
-            // Store sidebar-discovered GPTs directly in domDataRef.
-            // extractCustomGPTs() only works on gpt_editor/gpt_list pages,
-            // not the chat page we return to after project extraction.
-            // Sidebar scan is the reliable source for GPT discovery.
+            // Sidebar scan is the reliable source for GPT discovery;
+            // extractCustomGPTs() only enriches it on GPT editor pages.
             if (scanResult.gpts.length > 0) {
               domDataRef.current.customGPTs = scanResult.gpts.map((item) => ({
                 id: item.id,
@@ -189,49 +255,31 @@ function ChatGPTExtract(): React.JSX.Element {
               }));
             }
 
-            console.log(
-              `[PortSmith] Sidebar scan: ${scanResult.projects.length} projects, ${scanResult.gpts.length} GPTs`,
-            );
-
             const detail =
               `Found ${scanResult.projects.length} project${scanResult.projects.length === 1 ? "" : "s"}, ` +
               `${scanResult.gpts.length} GPT${scanResult.gpts.length === 1 ? "" : "s"}`;
             markStep(stepIdx, "complete", detail);
-          } catch {
-            markStep(stepIdx, "complete", "Sidebar scan failed — continuing");
+          } catch (err) {
+            warningsRef.current.push(
+              `sidebar: couldn't read the ChatGPT sidebar (${err instanceof Error ? err.message : String(err)})`,
+            );
+            markStep(stepIdx, "error", "Couldn't read the sidebar");
           }
           stepIdx++;
 
           // 2. Extract projects via API (no page navigation needed)
           markStep(stepIdx, "active");
           if (projectTargets.length > 0) {
-            try {
-              const projPromise = new Promise<void>((resolve) => {
-                const unsub = onMessage("DOM_EXTRACT_RESULT", (payload) => {
-                  if (payload.type === "projects") {
-                    if (payload.data.projects.length > 0) {
-                      domDataRef.current.projects = payload.data.projects;
-                      console.log(
-                        "[PortSmith] Extracted",
-                        payload.data.projects.length,
-                        "projects via API",
-                      );
-                    }
-                    unsub();
-                    resolve();
-                  }
-                });
-                setTimeout(() => {
-                  unsub();
-                  resolve();
-                }, DOM_TIMEOUT_MS);
-              });
-              await safeSendTabMessage(tabId, "DOM_EXTRACT", {
-                target: "projects",
-              });
-              await projPromise;
-            } catch {
-              // Non-fatal
+            const projects = await requestDomExtraction(tabId, "projects", PROJECTS_TIMEOUT_MS);
+            if (projects) {
+              addWarnings(projects.warnings);
+              if (projects.projects.length > 0) {
+                domDataRef.current.projects = projects.projects;
+              }
+            } else {
+              warningsRef.current.push(
+                "projects: reading project details timed out; only project names were kept",
+              );
             }
 
             // Fallback: if API extraction returned nothing, use sidebar names
@@ -244,53 +292,27 @@ function ChatGPTExtract(): React.JSX.Element {
                 knowledgeFileNames: [],
                 conversationCount: 0,
               }));
-              console.log(
-                "[PortSmith] API extraction returned no projects; using sidebar fallback for",
-                projectTargets.length,
-                "projects",
-              );
             }
 
             const projCount = domDataRef.current.projects.length;
             markStep(
               stepIdx,
-              "complete",
-              `Extracted ${projCount} project${projCount === 1 ? "" : "s"}`,
+              projects ? "complete" : "error",
+              projects
+                ? `Read ${projCount} project${projCount === 1 ? "" : "s"}`
+                : `Only names for ${projCount} project${projCount === 1 ? "" : "s"}`,
             );
           } else {
             markStep(stepIdx, "complete", "No projects found");
           }
           stepIdx++;
 
-          // 3. Custom GPTs
-          // Sidebar scan (step 1) already stored GPTs in domDataRef.
-          // DOM_EXTRACT only overrides if it finds richer data (e.g. on
-          // the gpt_editor page), which won't happen after navigating
-          // back to chatgpt.com. This prevents the empty DOM result
-          // from wiping out the sidebar-discovered GPTs.
+          // 3. Custom GPTs (only replaces the sidebar list with richer data)
           markStep(stepIdx, "active");
-          try {
-            const gptPromise = new Promise<void>((resolve) => {
-              const unsub = onMessage("DOM_EXTRACT_RESULT", (payload) => {
-                if (payload.type === "custom_gpts") {
-                  if (payload.data.gpts.length > 0) {
-                    domDataRef.current.customGPTs = payload.data.gpts;
-                  }
-                  unsub();
-                  resolve();
-                }
-              });
-              setTimeout(() => {
-                unsub();
-                resolve();
-              }, DOM_TIMEOUT_MS);
-            });
-            await safeSendTabMessage(tabId, "DOM_EXTRACT", {
-              target: "custom_gpts",
-            });
-            await gptPromise;
-          } catch {
-            // Non-fatal: sidebar GPTs (if any) already in domDataRef
+          const gpts = await requestDomExtraction(tabId, "custom_gpts", DOM_TIMEOUT_MS);
+          if (gpts) {
+            addWarnings(gpts.warnings);
+            if (gpts.gpts.length > 0) domDataRef.current.customGPTs = gpts.gpts;
           }
           const gptCount = domDataRef.current.customGPTs?.length ?? 0;
           markStep(
@@ -298,59 +320,46 @@ function ChatGPTExtract(): React.JSX.Element {
             "complete",
             gptCount > 0
               ? `${gptCount} GPT${gptCount === 1 ? "" : "s"} found`
-              : "No Custom GPTs found",
+              : "No custom GPTs found",
           );
           stepIdx++;
 
           // 4. Memory
           markStep(stepIdx, "active");
-          try {
-            const memPromise = new Promise<void>((resolve) => {
-              const unsub = onMessage("DOM_EXTRACT_RESULT", (payload) => {
-                if (payload.type === "memory") {
-                  domDataRef.current.memory = payload.data.items;
-                  unsub();
-                  resolve();
-                }
-              });
-              setTimeout(() => {
-                unsub();
-                resolve();
-              }, DOM_TIMEOUT_MS);
-            });
-            await safeSendTabMessage(tabId, "DOM_EXTRACT", { target: "memory" });
-            await memPromise;
-          } catch {
-            // Non-fatal
+          const memory = await requestDomExtraction(tabId, "memory", DOM_TIMEOUT_MS);
+          if (memory) {
+            addWarnings(memory.warnings);
+            domDataRef.current.memory = memory.items;
+            markStep(
+              stepIdx,
+              memory.success ? "complete" : "error",
+              memory.success
+                ? `${memory.items.length} memor${memory.items.length === 1 ? "y" : "ies"}`
+                : "Open Settings > Personalization > Memory in ChatGPT to include memories",
+            );
+          } else {
+            warningsRef.current.push("memory: timed out");
+            markStep(stepIdx, "error", "Timed out");
           }
-          markStep(stepIdx, "complete");
           stepIdx++;
 
           // 5. Custom Instructions
           markStep(stepIdx, "active");
-          try {
-            const instrPromise = new Promise<void>((resolve) => {
-              const unsub = onMessage("DOM_EXTRACT_RESULT", (payload) => {
-                if (payload.type === "custom_instructions") {
-                  domDataRef.current.customInstructions =
-                    payload.data.instructions;
-                  unsub();
-                  resolve();
-                }
-              });
-              setTimeout(() => {
-                unsub();
-                resolve();
-              }, DOM_TIMEOUT_MS);
-            });
-            await safeSendTabMessage(tabId, "DOM_EXTRACT", {
-              target: "custom_instructions",
-            });
-            await instrPromise;
-          } catch {
-            // Non-fatal
+          const instructions = await requestDomExtraction(tabId, "custom_instructions", DOM_TIMEOUT_MS);
+          if (instructions) {
+            addWarnings(instructions.warnings);
+            domDataRef.current.customInstructions = instructions.instructions;
+            markStep(
+              stepIdx,
+              instructions.instructions ? "complete" : "error",
+              instructions.instructions
+                ? "Found"
+                : "Open Settings > Personalization > Custom instructions in ChatGPT to include them",
+            );
+          } else {
+            warningsRef.current.push("custom instructions: timed out");
+            markStep(stepIdx, "error", "Timed out");
           }
-          markStep(stepIdx, "complete");
           stepIdx++;
         }
 
@@ -382,6 +391,9 @@ function ChatGPTExtract(): React.JSX.Element {
           rawData,
           hasDOMData ? domDataRef.current : undefined,
         );
+        if (warningsRef.current.length > 0) {
+          manifest.metadata.extractionWarnings = [...warningsRef.current];
+        }
 
         console.log(
           "[PortSmith] Manifest generated:",
@@ -406,6 +418,8 @@ function ChatGPTExtract(): React.JSX.Element {
         markStep(stepIdx, "error");
       } finally {
         runningRef.current = false;
+        stopProgress();
+        setProgressText(null);
       }
     },
     [method, markStep, setManifestId],
@@ -456,7 +470,7 @@ function ChatGPTExtract(): React.JSX.Element {
     setChatgptStatus("checking");
     try {
       const tabs = await chrome.tabs.query({
-        url: ["https://chatgpt.com/*", "https://chat.openai.com/*"],
+        url: "https://chatgpt.com/*",
       });
       if (tabs.length === 0) {
         setChatgptStatus("not_found");
@@ -485,6 +499,7 @@ function ChatGPTExtract(): React.JSX.Element {
         const response = await safeSendTabMessage(tabId, "PING");
         if (response?.pong) {
           setChatgptStatus("ready");
+          readyTabRef.current = tabId;
 
           if (bestTab.windowId !== currentWindow.id) {
             setChatgptTabLocation("in another window");
@@ -569,7 +584,7 @@ function ChatGPTExtract(): React.JSX.Element {
                 </svg>
                 <span>
                   {chatgptTabLocation
-                    ? `Found ChatGPT ${chatgptTabLocation} — ready to go`
+                    ? `Found ChatGPT ${chatgptTabLocation}. Ready to go.`
                     : "ChatGPT is open and ready"}
                 </span>
               </div>
@@ -597,7 +612,7 @@ function ChatGPTExtract(): React.JSX.Element {
                     onClick={() => void checkForChatGPT()}
                     className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-50"
                   >
-                    I already opened it — check again
+                    I already opened it, check again
                   </button>
                 </div>
                 <p className="mt-2 text-xs text-amber-600">
@@ -670,7 +685,7 @@ function ChatGPTExtract(): React.JSX.Element {
             </li>
             <li className="flex gap-2">
               <span className="flex-shrink-0 w-5 h-5 rounded-full bg-blue-100 text-blue-700 text-xs flex items-center justify-center font-bold">3</span>
-              <span>Check your email — OpenAI will send you a download link (usually within a few minutes, sometimes up to 24 hours)</span>
+              <span>Check your email. OpenAI will send you a download link (usually within a few minutes, sometimes up to 24 hours)</span>
             </li>
             <li className="flex gap-2">
               <span className="flex-shrink-0 w-5 h-5 rounded-full bg-blue-100 text-blue-700 text-xs flex items-center justify-center font-bold">4</span>
@@ -688,7 +703,7 @@ function ChatGPTExtract(): React.JSX.Element {
         </div>
 
         <p className="mt-3 text-xs text-slate-400 text-center">
-          Still waiting for the email? You can close this and come back later —
+          Still waiting for the email? You can close this and come back later,
           or go Back to choose &ldquo;Read from your ChatGPT account&rdquo; instead.
         </p>
       </div>
@@ -759,8 +774,14 @@ function ChatGPTExtract(): React.JSX.Element {
     <div className="flex flex-1 flex-col">
       <h2 className="text-lg font-semibold text-gray-900">Reading your ChatGPT data</h2>
       <p className="mt-1 text-sm text-gray-500">
-        Please keep this panel open — this will only take a moment.
+        Please keep this panel open. Projects with many files can take a
+        minute or two.
       </p>
+      {progressText && (
+        <p className="mt-2 text-xs text-gray-600" role="status" aria-live="polite">
+          {progressText}
+        </p>
+      )}
       <div className="mt-4">
         <ProgressTracker steps={steps} startedAt={startedAt} />
       </div>

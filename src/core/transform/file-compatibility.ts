@@ -103,3 +103,37 @@ export function getConversionSuggestion(filename: string): string | undefined {
 export function getMimeType(filename: string): string {
   return MIME_MAP[getFileExtension(filename)] ?? "application/octet-stream";
 }
+
+// ─── Text detection ─────────────────────────────────────────
+
+const TEXT_EXTENSIONS = new Set([
+  "txt", "md", "markdown", "csv", "tsv", "json", "jsonl", "xml", "html", "htm",
+  "yaml", "yml", "toml", "ini", "cfg", "conf", "log", "tex", "rst",
+  "py", "js", "ts", "tsx", "jsx", "mjs", "cjs", "css", "scss", "less",
+  "java", "c", "cpp", "h", "hpp", "cs", "rb", "go", "rs", "swift", "kt",
+  "php", "sh", "bash", "zsh", "sql", "r", "scala", "vue", "svelte", "lua",
+  "pl", "dart", "ipynb",
+]);
+
+const TEXT_MIME_PREFIXES = ["text/"];
+const TEXT_MIME_TYPES = new Set([
+  "application/json",
+  "application/xml",
+  "application/javascript",
+  "application/x-yaml",
+  "application/yaml",
+  "application/x-sh",
+  "application/sql",
+]);
+
+/**
+ * Whether a file should be sent to Claude as a text project document
+ * (POST /projects/{id}/docs) rather than as a binary upload.
+ */
+export function isTextLikeFile(filename: string, mimeType?: string): boolean {
+  const mime = (mimeType ?? "").toLowerCase().split(";")[0]?.trim() ?? "";
+  if (mime && (TEXT_MIME_PREFIXES.some((p) => mime.startsWith(p)) || TEXT_MIME_TYPES.has(mime))) {
+    return true;
+  }
+  return TEXT_EXTENSIONS.has(getFileExtension(filename.trim()));
+}

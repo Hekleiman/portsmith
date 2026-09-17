@@ -52,7 +52,7 @@ async function initSession(): Promise<GeminiSession> {
   const accessToken = html.match(/"SNlM0e":\s*"(.*?)"/)?.[1];
   if (!accessToken) {
     throw new Error(
-      "Could not find SNlM0e token — are you logged in to gemini.google.com?",
+      "Could not find Gemini's session token. Are you signed in to gemini.google.com?",
     );
   }
 
@@ -131,7 +131,7 @@ function parseGem(
   if (!name) {
     warnings.push({
       context: "parseGem",
-      message: `Gem ${id} has no name — skipping`,
+      message: `Gem ${id} has no name, so it was skipped`,
     });
     return null;
   }
@@ -255,7 +255,7 @@ export async function extractGems(): Promise<GemExtractionResult> {
     warnings.push({
       context: "response",
       message:
-        'No response frame with identifier "custom" found — ' +
+        'No response frame with identifier "custom" found; ' +
         `received ${frames.length} frame(s)`,
     });
   }

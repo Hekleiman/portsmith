@@ -3,7 +3,10 @@ import type {
   DOMExtractionResult,
   ProjectExtractionResult,
 } from "@/core/adapters/chatgpt-dom-types";
-import type { ClaudeExtractionResult } from "@/core/adapters/claude-dom-types";
+import type {
+  ClaudeExtractionOptions,
+  ClaudeExtractionResult,
+} from "@/core/adapters/claude-dom-types";
 import type { GemExtractionResult } from "@/core/adapters/gemini-dom-types";
 import type { GemConfig, GemImportResult } from "@/core/adapters/gemini-import-types";
 
@@ -102,12 +105,24 @@ export interface DOMInspectionReport {
 
 // ─── Orchestrator Types ─────────────────────────────────────
 
+/** A file the user can download from a guided step and upload by hand. */
+export interface StepDownload {
+  label: string;
+  fileName: string;
+  mimeType: string;
+  /** Inline text content (e.g. rendered project memory) */
+  content?: string;
+  /** IndexedDB file reference (e.g. a knowledge file copied from the source) */
+  contentRef?: string;
+}
+
 export interface MigrationStepFallback {
   id: string;
   title: string;
   description: string;
   copyBlocks: Array<{ label: string; content: string }>;
   fileNames?: string[];
+  downloads?: StepDownload[];
   link?: string;
   actionHint?: string;
   stepNumber?: number;
@@ -129,6 +144,17 @@ export interface MigrationStep {
   instructionsDelivery?: InstructionsDelivery;
   /** Set on verify steps to indicate API verification passed */
   verified?: boolean;
+  /** True once the project/Gem exists on the target */
+  projectCreated?: boolean;
+  /** Button labels for "pending" steps */
+  confirmLabel?: string;
+  skipLabel?: string;
+  /** Knowledge files that reached the target in this step */
+  filesDelivered?: number;
+  /** True once the project memory document is on the target */
+  projectMemoryAdded?: boolean;
+  /** Something the user still has to check, whatever the step's status */
+  followUp?: string;
 }
 
 export interface MigrationGuidedInstructions {
@@ -141,13 +167,21 @@ export interface MigrationGuidedInstructions {
 export interface OrchestratorStatus {
   phase: "idle" | "running" | "paused" | "memory" | "complete";
   mode: "autofill" | "guided" | "hybrid" | null;
+  /** Target platform of the current run */
+  targetPlatform: string | null;
+  /** Manifest the current run was started from (null when idle) */
+  manifestId: string | null;
   totalWorkspaces: number;
   currentWorkspaceIndex: number;
   currentWorkspaceName: string | null;
   completedWorkspaceIds: string[];
   failedWorkspaces: Array<{ id: string; name: string; error: string }>;
+  /** Workspaces the extension could not finish; the user has manual steps */
+  manualWorkspaces: Array<{ id: string; name: string; reason: string }>;
   currentSteps: MigrationStep[];
   pendingConfirmStepId: string | null;
+  /** Changes with every question, even when the step ID stays the same */
+  pendingConfirmToken: string | null;
   guidedInstructions: MigrationGuidedInstructions | null;
   memorySteps: MigrationStepFallback[];
   hasMemory: boolean;
@@ -159,6 +193,16 @@ export interface OrchestratorStatus {
   clipboardInstructions: Record<string, string>;
   /** Workspace IDs that passed API verification during autofill */
   verifiedWorkspaceIds: string[];
+  /** Workspaces that exist on the target (even if a later step stopped) */
+  createdWorkspaceIds: string[];
+  /** Per-workspace things that still need the user after the run */
+  followUps: Record<string, string[]>;
+  /** Knowledge files that reached the target, per workspace */
+  filesDelivered: Record<string, number>;
+  /** Workspaces whose project memory reached the target */
+  projectMemoryWorkspaceIds: string[];
+  /** Whether the user finished the memory steps (null: there were none yet) */
+  memoryImported: boolean | null;
   /** Warning when multiple Claude tabs are detected */
   duplicateTabWarning?: string;
 }
@@ -240,15 +284,21 @@ export interface MessageMap {
     response: { success: boolean };
   };
   MIGRATION_CONFIRM: {
-    request: { confirmed: boolean };
+    /**
+     * `token` is the `pendingConfirmToken` the user saw. A stale token (a
+     * double click reaching the next question) is ignored.
+     */
+    request: { confirmed: boolean; token?: string };
     response: { success: boolean };
   };
   MIGRATION_WORKSPACE_DONE: {
-    request: { workspaceId: string };
+    /** IDs of guided steps the user didn't tick off */
+    request: { workspaceId: string; skippedStepIds?: string[] };
     response: { success: boolean };
   };
   MIGRATION_MEMORY_DONE: {
-    request: void;
+    /** False when the user skipped some memory steps */
+    request: { allDone: boolean };
     response: { success: boolean };
   };
   MIGRATION_UPDATE_DELIVERY: {
@@ -257,7 +307,18 @@ export interface MessageMap {
   };
   VERIFY_PROJECTS: {
     request: { projectNames: string[] };
-    response: { found: string[]; notFound: string[] };
+    response: { found: string[]; notFound: string[]; error?: string };
+  };
+  /** Look up project names in the user's Claude account (no navigation) */
+  CLAUDE_FIND_PROJECTS: {
+    request: { names: string[] };
+    response: {
+      found: string[];
+      notFound: string[];
+      /** Every project whose name matched, newest first */
+      matches?: Array<{ name: string; uuid: string; createdAt: string }>;
+      error?: string;
+    };
   };
   /** Ask content script to watch for SPA navigation to a matching URL */
   WAIT_FOR_NAVIGATION: {
@@ -321,8 +382,13 @@ export interface MessageMap {
   };
   /** Extract Projects from the user's Claude account via internal API */
   CLAUDE_EXTRACT_PROJECTS: {
-    request: void;
+    request: ClaudeExtractionOptions;
     response: ClaudeExtractionResult;
+  };
+  /** Add a text document to a Claude project's knowledge */
+  CLAUDE_CREATE_DOC: {
+    request: { projectUuid: string; fileName: string; content: string };
+    response: { success: boolean; uuid?: string; error?: string };
   };
   /** Extract Gems from the user's Gemini account via batchexecute API */
   GEMINI_EXTRACT_GEMS: {
@@ -398,9 +464,19 @@ function isResponseEnvelope(value: unknown): value is ResponseEnvelope {
 export const MESSAGE_TIMEOUT_MS = 10_000;
 
 /** Per-message timeout overrides for long-running operations. */
+// Claude requests retry on HTTP 429 for up to ~30 seconds (see
+// content-scripts/claude/api.ts). The sender must wait longer than that:
+// giving up early while a retry is still on its way is how v0.4 betas
+// created projects twice.
 const MESSAGE_TIMEOUT_OVERRIDES: Partial<Record<MessageName, number>> = {
   STORE_DOWNLOADED_FILE: 30_000,
-  CLAUDE_UPLOAD_FILE: 60_000,
+  CLAUDE_CREATE_PROJECT: 90_000,
+  CLAUDE_SET_INSTRUCTIONS: 90_000,
+  CLAUDE_VERIFY_PROJECT: 60_000,
+  CLAUDE_UPLOAD_FILE: 180_000,
+  CLAUDE_CREATE_DOC: 120_000,
+  CLAUDE_FIND_PROJECTS: 120_000,
+  VERIFY_PROJECTS: 130_000,
   // Extraction fans out to one request per project (plus memory and docs),
   // so it needs far more than the default budget on large accounts.
   CLAUDE_EXTRACT_PROJECTS: 180_000,
@@ -437,7 +513,7 @@ export class NoListenerError extends MessageError {
   constructor(messageName: string) {
     super(
       messageName,
-      "No listener available — is the target context active?",
+      "No listener available. Is the target context active?",
     );
     this.name = "NoListenerError";
   }

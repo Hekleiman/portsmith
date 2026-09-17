@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useMigrationStore } from "../store/migration-store";
 import { loadManifest } from "@/core/storage/indexed-db";
 import type { PortsmithManifest } from "@/core/schema/types";
+import { getInstructionsForTarget, platformLabel } from "@/core/platforms";
+import { hasProjectMemory } from "@/core/transform/project-memory";
 import WorkspaceCard from "../components/WorkspaceCard";
 import MemoryList from "../components/MemoryList";
 
@@ -72,6 +74,9 @@ export default function Review(): React.JSX.Element {
     (s) => s.setEditingWorkspaceId,
   );
   const goToStep = useMigrationStore((s) => s.goToStep);
+  const targetPlatform = useMigrationStore((s) => s.targetPlatform);
+  const reviewedManifestId = useMigrationStore((s) => s.reviewedManifestId);
+  const setReviewedManifestId = useMigrationStore((s) => s.setReviewedManifestId);
 
   const [manifest, setManifest] = useState<PortsmithManifest | null>(null);
   const [loading, setLoading] = useState(true);
@@ -95,11 +100,18 @@ export default function Review(): React.JSX.Element {
         }
         setManifest(record.data);
 
-        // Initialize selection with all workspace IDs if not already set
-        // (preserve existing selection on resume)
-        if (selectedIds.length === 0 && record.data.workspaces.length > 0) {
+        // First visit for this manifest: select everything (unless a
+        // resumed selection exists). Later visits keep the user's choice,
+        // even when it is empty (for example after a stopped run removed
+        // the workspaces that already exist on the target).
+        const available = new Set(record.data.workspaces.map((w) => w.id));
+        const kept = selectedIds.filter((id) => available.has(id));
+        if (reviewedManifestId === manifestId || kept.length > 0) {
+          if (kept.length !== selectedIds.length) setSelectedWorkspaceIds(kept);
+        } else if (record.data.workspaces.length > 0) {
           setSelectedWorkspaceIds(record.data.workspaces.map((w) => w.id));
         }
+        setReviewedManifestId(manifestId);
 
         setLoading(false);
       })
@@ -114,7 +126,7 @@ export default function Review(): React.JSX.Element {
     };
     // Only run on mount / manifestId change — not when selectedIds changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [manifestId, setSelectedWorkspaceIds]);
+  }, [manifestId, setSelectedWorkspaceIds, setReviewedManifestId]);
 
   const handleEdit = useCallback(
     (workspaceId: string) => {
@@ -167,12 +179,20 @@ export default function Review(): React.JSX.Element {
           </svg>
         </div>
         <h2 className="mt-4 text-lg font-semibold text-gray-900">
-          No Workspaces Found
+          Nothing to migrate yet
         </h2>
-        <p className="mt-1 text-sm text-gray-500">
-          The extraction didn't find any Custom GPTs to migrate. Try using a
-          different extraction method.
+        <p className="mt-1 text-sm text-gray-600">
+          {manifest?.source.platform === "chatgpt"
+            ? "No projects or custom GPTs were found. Keep the ChatGPT sidebar open (with your projects visible) and choose \"Read from browser\"; a backup file on its own doesn't include GPT or project settings."
+            : `No ${manifest?.source.platform === "gemini" ? "Gems" : "projects"} were found in your ${platformLabel(manifest?.source.platform)} account.`}
         </p>
+        {(manifest?.metadata.extractionWarnings?.length ?? 0) > 0 && (
+          <ul className="mt-3 space-y-1 text-left text-xs text-amber-900">
+            {manifest?.metadata.extractionWarnings?.map((w, i) => (
+              <li key={i}>{w}</li>
+            ))}
+          </ul>
+        )}
       </div>
     );
   }
@@ -189,9 +209,16 @@ export default function Review(): React.JSX.Element {
     (f) => !f.compatible && !f.conversionNeeded,
   ).length;
 
-  const allWarnings = manifest.workspaces.flatMap((w) =>
-    w.migration.warnings.map((msg) => ({ workspace: w.name, msg })),
-  );
+  const allWarnings = [
+    ...(manifest.metadata.extractionWarnings ?? []).map((msg) => ({
+      workspace: "While reading your data",
+      msg,
+    })),
+    ...manifest.workspaces.flatMap((w) =>
+      w.migration.warnings.map((msg) => ({ workspace: w.name, msg })),
+    ),
+  ];
+  const memoryWorkspaces = manifest.workspaces.filter(hasProjectMemory).length;
 
   // ─── Render ──────────────────────────────────────────────
 
@@ -200,8 +227,9 @@ export default function Review(): React.JSX.Element {
       <h2 className="text-lg font-semibold text-gray-900">
         Review Extracted Data
       </h2>
-      <p className="mt-1 text-sm text-gray-500">
-        Toggle workspaces to include or exclude from migration.
+      <p className="mt-1 text-sm text-gray-600">
+        Choose what to migrate. Open a workspace to edit its instructions or
+        project memory first.
       </p>
 
       {/* Summary stats */}
@@ -221,18 +249,26 @@ export default function Review(): React.JSX.Element {
           <span className="font-medium text-gray-900">
             {totalFiles} file{totalFiles !== 1 ? "s" : ""}
           </span>
+          {memoryWorkspaces > 0 && (
+            <>
+              ,{" "}
+              <span className="font-medium text-gray-900">
+                project memory for {memoryWorkspaces}
+              </span>
+            </>
+          )}
         </p>
         {totalFiles > 0 && (
           <p className="mt-1 text-xs text-gray-500">
-            <span className="text-green-600">{compatibleFiles} compatible</span>
+            <span className="text-green-800">{compatibleFiles} ready</span>
             {conversionFiles > 0 && (
-              <span className="text-amber-600">
+              <span className="text-amber-800">
                 , {conversionFiles} need{conversionFiles === 1 ? "s" : ""}{" "}
-                conversion
+                attention
               </span>
             )}
             {unsupportedFiles > 0 && (
-              <span className="text-red-500">
+              <span className="text-red-800">
                 , {unsupportedFiles} unsupported
               </span>
             )}
@@ -259,6 +295,11 @@ export default function Review(): React.JSX.Element {
               accepted={selectedIds.includes(ws.id)}
               onToggle={() => toggleWorkspace(ws.id)}
               onEdit={() => handleEdit(ws.id)}
+              adaptedFor={
+                getInstructionsForTarget(ws, targetPlatform) !== ws.instructions.raw
+                  ? platformLabel(targetPlatform)
+                  : null
+              }
             />
           ))}
         </div>
@@ -283,11 +324,12 @@ export default function Review(): React.JSX.Element {
             Custom Instructions
           </h3>
           <div className="mt-2 rounded-lg border border-gray-200 p-3">
-            <p className="line-clamp-4 whitespace-pre-wrap text-sm text-gray-600">
+            <p className="line-clamp-4 whitespace-pre-wrap text-sm text-gray-700">
               {manifest.globalInstructions}
             </p>
-            <p className="mt-1.5 text-xs text-gray-400">
-              {manifest.globalInstructions.length} characters
+            <p className="mt-1.5 text-xs text-gray-600">
+              {manifest.globalInstructions.length} characters. These are
+              included in the memory step at the end.
             </p>
           </div>
         </section>
@@ -305,10 +347,10 @@ export default function Review(): React.JSX.Element {
                 key={i}
                 className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2"
               >
-                <p className="text-xs font-medium text-amber-800">
+                <p className="text-xs font-medium text-amber-900">
                   {w.workspace}
                 </p>
-                <p className="text-xs text-amber-700">{w.msg}</p>
+                <p className="text-xs text-amber-900">{w.msg}</p>
               </div>
             ))}
           </div>

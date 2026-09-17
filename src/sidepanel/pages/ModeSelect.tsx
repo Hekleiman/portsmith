@@ -2,11 +2,7 @@ import { useEffect, useMemo } from "react";
 import type { DeliveryMode } from "@/core/storage/migration-state";
 import ModeCard from "../components/ModeCard";
 import { useMigrationStore } from "../store/migration-store";
-
-const TARGET_LABELS: Record<string, string> = {
-  claude: "Claude",
-  gemini: "Gemini",
-};
+import { platformLabel, supportedModesForTarget } from "@/core/platforms";
 
 const MODES: {
   id: DeliveryMode;
@@ -21,10 +17,10 @@ const MODES: {
     id: "autofill",
     title: "Autofill",
     description:
-      "Extension does it for you. Fastest, but depends on Claude's UI not changing.",
+      "PortSmith creates each project for you and only stops when something needs your hands.",
     badge: "Fastest",
     pros: ["Hands-free", "Bulk import"],
-    cons: ["May break if UI changes"],
+    cons: ["Relies on the platform's internal API"],
     icon: (
       <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-violet-100">
         <svg
@@ -69,10 +65,10 @@ const MODES: {
     id: "hybrid",
     title: "Hybrid",
     description:
-      "Auto-fills with your confirmation at each step.",
+      "Like Autofill, but asks before creating each project.",
     badge: "Recommended",
-    pros: ["Fast with safety net", "Confirm each step"],
-    cons: ["Slightly slower than Autofill"],
+    pros: ["Fast with safety net", "Approve each project"],
+    cons: ["One click per project"],
     icon: (
       <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-100">
         <svg
@@ -96,34 +92,37 @@ export default function ModeSelect(): React.JSX.Element {
   const deliveryMode = useMigrationStore((s) => s.deliveryMode);
   const setDeliveryMode = useMigrationStore((s) => s.setDeliveryMode);
   const targetPlatform = useMigrationStore((s) => s.targetPlatform);
-  const targetName = TARGET_LABELS[targetPlatform ?? "claude"] ?? "the target";
+  const targetName = platformLabel(targetPlatform);
+  const supported = useMemo(
+    () => supportedModesForTarget(targetPlatform),
+    [targetPlatform],
+  );
 
-  const isGeminiTarget = targetPlatform === "gemini";
-
-  // For Gemini target, adjust autofill description since it uses API not DOM
   const modes = useMemo(
     () =>
       MODES.map((m) => {
-        if (!isGeminiTarget) return m;
-        if (m.id === "autofill") {
+        if (targetPlatform === "gemini" && m.id === "autofill") {
           return {
             ...m,
             description:
-              "Extension creates Gems via Gemini's API. Fastest and most reliable.",
-            cons: ["Requires Gemini tab open"],
+              "PortSmith creates each Gem through Gemini's API. You add knowledge files afterwards.",
+            cons: ["Needs a Gemini tab (opened for you)"],
           };
+        }
+        if (targetPlatform === "gemini" && m.id === "hybrid") {
+          return { ...m, description: "Like Autofill, but asks before creating each Gem." };
         }
         return m;
       }),
-    [isGeminiTarget],
+    [targetPlatform],
   );
 
-  // Pre-select Hybrid as default
+  // Default: Hybrid where supported, otherwise the first supported mode
   useEffect(() => {
-    if (deliveryMode === null) {
-      setDeliveryMode("hybrid");
+    if (deliveryMode === null || !supported.includes(deliveryMode)) {
+      setDeliveryMode(supported.includes("hybrid") ? "hybrid" : (supported[0] ?? "guided"));
     }
-  }, [deliveryMode, setDeliveryMode]);
+  }, [deliveryMode, setDeliveryMode, supported]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -131,7 +130,7 @@ export default function ModeSelect(): React.JSX.Element {
         <h2 className="text-lg font-semibold text-gray-900">
           How should we import?
         </h2>
-        <p className="mt-1 text-sm text-gray-500">
+        <p className="mt-1 text-sm text-gray-600">
           Choose how PortSmith delivers your data into {targetName}.
         </p>
       </div>
@@ -146,6 +145,8 @@ export default function ModeSelect(): React.JSX.Element {
             pros={m.pros}
             cons={m.cons}
             selected={deliveryMode === m.id}
+            disabled={!supported.includes(m.id)}
+            disabledReason={`${targetName} can't be filled in automatically yet, so only Guided is available.`}
             onClick={() => setDeliveryMode(m.id)}
           />
         ))}

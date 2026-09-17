@@ -141,7 +141,7 @@ function parseConversation(
   warnings: string[],
 ): ParsedConversation | null {
   if (!raw.mapping || typeof raw.mapping !== "object") {
-    warnings.push(`Conversation "${raw.title ?? "untitled"}" has no mapping — skipped`);
+    warnings.push(`Conversation "${raw.title ?? "untitled"}" has no mapping, so it was skipped`);
     return null;
   }
 
@@ -202,7 +202,7 @@ function parseConversationsJSON(
 
   if (jsonBytes.byteLength > MAX_INLINE_PARSE_BYTES) {
     warnings.push(
-      `conversations.json is ${Math.round(jsonBytes.byteLength / 1024 / 1024)}MB — parsing may be slow`,
+      `conversations.json is ${Math.round(jsonBytes.byteLength / 1024 / 1024)}MB, so reading it may take a while`,
     );
   }
 

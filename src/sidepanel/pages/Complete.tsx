@@ -1,9 +1,21 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useMigrationStore } from "../store/migration-store";
 import { sendMessage, type OrchestratorStatus } from "@/shared/messaging";
-import { loadManifest } from "@/core/storage/indexed-db";
+import {
+  deleteManifestAndFiles,
+  loadLatestCheckpoint,
+  loadManifest,
+} from "@/core/storage/indexed-db";
 import type { PortsmithManifest, Workspace } from "@/core/schema/types";
 import type { VerificationResult } from "@/core/adapters/claude-verifier";
+import {
+  PLATFORM_HOME_URLS,
+  PLATFORM_ITEM_NOUN,
+  isPlatformId,
+  platformLabel,
+  type PlatformId,
+} from "@/core/platforms";
+import { hasProjectMemory } from "@/core/transform/project-memory";
 import MigrationSummary, {
   type WorkspaceSummary,
   type WorkspaceStatus,
@@ -11,83 +23,100 @@ import MigrationSummary, {
 import ManualFollowUp, {
   type FollowUpItem,
 } from "../components/ManualFollowUp";
+import ConfirmButton from "../components/ConfirmButton";
+import StepCard from "../components/StepCard";
+import { buildMemoryStepsForTarget } from "@/core/adapters/memory-steps";
 
-// ─── Unsupported capability types on Claude ─────────────────
+// ─── Capabilities each target can't provide ─────────────────
 
-const UNSUPPORTED_ON_CLAUDE = new Set([
-  "image_generation",
-  "api_actions",
-  "voice",
-]);
+const UNSUPPORTED_BY_TARGET: Record<PlatformId, Set<string>> = {
+  claude: new Set(["image_generation", "api_actions"]),
+  gemini: new Set(["api_actions"]),
+  chatgpt: new Set([]),
+};
+
+const CAPABILITY_LABELS: Record<string, string> = {
+  image_generation: "Image generation",
+  api_actions: "Custom API Actions",
+};
+
+interface RunResult {
+  completed: Set<string>;
+  failed: Map<string, string>;
+  manual: Map<string, string>;
+  verified: Set<string>;
+  /** Steps that were skipped or need checking, per workspace */
+  followUps: Map<string, string[]>;
+  filesDelivered: Map<string, number>;
+  projectMemory: Set<string>;
+  /** null when the run had no memory step (or ended before it) */
+  memoryImported: boolean | null;
+}
 
 // ─── Helpers ────────────────────────────────────────────────
 
 function classifyWorkspace(
   ws: Workspace,
-  failed: boolean,
-  apiVerified: boolean,
+  result: RunResult,
+  target: PlatformId,
 ): WorkspaceStatus {
-  if (failed) return "failed";
+  if (result.failed.has(ws.id)) return "failed";
+  if (!result.completed.has(ws.id)) return "skipped";
 
-  // If API verification confirmed the project exists with correct data,
-  // treat as fully migrated — warnings still show in follow-up items
-  if (apiVerified) return "success";
+  const unsupported = UNSUPPORTED_BY_TARGET[target];
+  const hasUnsupported = ws.capabilities.some((c) => unsupported.has(c.type));
+  const hasFilesToMove = ws.knowledgeFiles.some((f) => !f.contentRef);
+  const hasFollowUps = (result.followUps.get(ws.id)?.length ?? 0) > 0;
 
-  const hasUnsupported = ws.capabilities.some(
-    (c) => UNSUPPORTED_ON_CLAUDE.has(c.type) && c.required,
-  );
-  const hasIncompatibleFiles = ws.knowledgeFiles.some((f) => !f.compatible);
-  const hasManualSteps = ws.migration.manualStepsRequired.length > 0;
-
-  if (hasUnsupported || hasIncompatibleFiles || hasManualSteps) return "partial";
+  if (hasUnsupported || hasFilesToMove || hasFollowUps) return "partial";
   return "success";
 }
 
 function buildFollowUpItems(
   workspaces: Workspace[],
-  failedIds: Set<string>,
+  result: RunResult,
+  target: PlatformId,
 ): FollowUpItem[] {
   const items: FollowUpItem[] = [];
+  const unsupported = UNSUPPORTED_BY_TARGET[target];
+  const targetName = platformLabel(target);
 
   for (const ws of workspaces) {
-    if (failedIds.has(ws.id)) continue;
+    if (!result.completed.has(ws.id)) continue;
 
-    // Unsupported capabilities
+    for (const note of result.followUps.get(ws.id) ?? []) {
+      items.push({
+        workspaceName: ws.name,
+        type: "manual_step",
+        description: note,
+      });
+    }
+
     for (const cap of ws.capabilities) {
-      if (UNSUPPORTED_ON_CLAUDE.has(cap.type)) {
-        const label =
-          cap.type === "image_generation"
-            ? "DALL-E image generation"
-            : cap.type === "api_actions"
-              ? "API Actions"
-              : cap.type;
+      if (unsupported.has(cap.type)) {
+        const label = CAPABILITY_LABELS[cap.type] ?? cap.type;
         items.push({
           workspaceName: ws.name,
           type: "unsupported_capability",
-          description: `${label} is not available on Claude${cap.equivalent ? ` (consider: ${cap.equivalent})` : ""}`,
+          description: `${label} isn't available in ${targetName}${cap.equivalent ? ` (consider: ${cap.equivalent})` : ""}`,
         });
       }
     }
 
-    // Incompatible files
     for (const f of ws.knowledgeFiles) {
-      if (!f.compatible) {
-        items.push({
-          workspaceName: ws.name,
-          type: "incompatible_file",
-          description: `"${f.originalName}" (${f.mimeType}) is not compatible`,
-        });
-      } else if (f.conversionNeeded) {
-        items.push({
-          workspaceName: ws.name,
-          type: "conversion_needed",
-          description: `"${f.originalName}" needs conversion: ${f.conversionNeeded}`,
-        });
-      }
+      if (f.contentRef) continue;
+      items.push({
+        workspaceName: ws.name,
+        type: f.conversionNeeded ? "conversion_needed" : "incompatible_file",
+        description: f.conversionNeeded
+          ? `"${f.originalName}": ${f.conversionNeeded}`
+          : `"${f.originalName}" wasn't copied; upload it by hand if you need it`,
+      });
     }
 
-    // Manual steps
     for (const step of ws.migration.manualStepsRequired) {
+      // Upload reminders are covered by the run's own file steps.
+      if (/^(upload|re-upload)\b/i.test(step)) continue;
       items.push({
         workspaceName: ws.name,
         type: "manual_step",
@@ -112,6 +141,41 @@ function exportManifest(manifest: PortsmithManifest): void {
   URL.revokeObjectURL(url);
 }
 
+async function loadRunResult(): Promise<RunResult> {
+  let status: OrchestratorStatus | null = null;
+  try {
+    status = await sendMessage("MIGRATION_STATUS");
+  } catch {
+    // Service worker unavailable; fall back to the last checkpoint
+  }
+
+  if (status && status.phase !== "idle") {
+    return {
+      completed: new Set(status.completedWorkspaceIds),
+      failed: new Map(status.failedWorkspaces.map((f) => [f.id, f.error])),
+      manual: new Map(status.manualWorkspaces.map((m) => [m.id, m.reason])),
+      verified: new Set(status.verifiedWorkspaceIds),
+      followUps: new Map(Object.entries(status.followUps ?? {})),
+      filesDelivered: new Map(Object.entries(status.filesDelivered ?? {})),
+      projectMemory: new Set(status.projectMemoryWorkspaceIds ?? []),
+      memoryImported: status.memoryImported ?? null,
+    };
+  }
+
+  const ckpt = await loadLatestCheckpoint().catch(() => undefined);
+  const snap = ckpt?.migrationState;
+  return {
+    completed: new Set(snap?.completedWorkspaceIds ?? []),
+    failed: new Map((snap?.failedWorkspaces ?? []).map((f) => [f.id, f.error])),
+    manual: new Map((snap?.manualWorkspaces ?? []).map((m) => [m.id, m.reason])),
+    verified: new Set(snap?.verifiedWorkspaceIds ?? []),
+    followUps: new Map(Object.entries(snap?.followUps ?? {})),
+    filesDelivered: new Map(Object.entries(snap?.filesDelivered ?? {})),
+    projectMemory: new Set(snap?.projectMemoryWorkspaceIds ?? []),
+    memoryImported: snap?.memoryImported ?? null,
+  };
+}
+
 // ─── Component ──────────────────────────────────────────────
 
 export default function Complete(): React.JSX.Element {
@@ -121,35 +185,39 @@ export default function Complete(): React.JSX.Element {
     (s) => s.selectedWorkspaceIds,
   );
   const migrationStartedAt = useMigrationStore((s) => s.migrationStartedAt);
+  const targetPlatform = useMigrationStore((s) => s.targetPlatform);
+  const target: PlatformId = isPlatformId(targetPlatform) ? targetPlatform : "claude";
+  const targetName = platformLabel(target);
 
   const [manifest, setManifest] = useState<PortsmithManifest | null>(null);
-  const [orchestratorStatus, setOrchestratorStatus] =
-    useState<OrchestratorStatus | null>(null);
+  const [result, setResult] = useState<RunResult | null>(null);
   const [verificationResult, setVerificationResult] =
     useState<VerificationResult | null>(null);
   const [verifying, setVerifying] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [memoryDone, setMemoryDone] = useState<Set<string>>(new Set());
 
-  // Load manifest and orchestrator status on mount
+  // Memory steps to show again when they were skipped during the run
+  const memorySteps = useMemo(
+    () => buildMemoryStepsForTarget(manifest, target),
+    [manifest, target],
+  );
+
+  // Load manifest and results on mount
   useEffect(() => {
     let active = true;
 
     async function init(): Promise<void> {
-      // Load manifest
       if (manifestId) {
-        const record = await loadManifest(manifestId);
+        const record = await loadManifest(manifestId).catch(() => undefined);
         if (active && record) setManifest(record.data);
       }
-
-      // Get final orchestrator status
-      try {
-        const status = await sendMessage("MIGRATION_STATUS");
-        if (active) setOrchestratorStatus(status);
-      } catch {
-        // Service worker unavailable — degrade gracefully
+      const run = await loadRunResult();
+      if (active) {
+        setResult(run);
+        setLoading(false);
       }
-
-      if (active) setLoading(false);
     }
 
     void init();
@@ -158,17 +226,18 @@ export default function Complete(): React.JSX.Element {
     };
   }, [manifestId]);
 
-  // Auto-run verification after data loads
+  // Double-check Claude projects that weren't verified during the run
   useEffect(() => {
-    if (loading || !manifest || verifying || verificationResult) return;
+    if (target !== "claude") return;
+    if (loading || !manifest || !result || verifying || verificationResult) return;
 
-    const completedIds = new Set(
-      orchestratorStatus?.completedWorkspaceIds ?? [],
-    );
     const projectNames = manifest.workspaces
       .filter(
         (ws) =>
-          selectedWorkspaceIds.includes(ws.id) && completedIds.has(ws.id),
+          selectedWorkspaceIds.includes(ws.id) &&
+          result.completed.has(ws.id) &&
+          !result.verified.has(ws.id) &&
+          !result.followUps.has(ws.id),
       )
       .map((ws) => ws.name);
 
@@ -180,30 +249,36 @@ export default function Complete(): React.JSX.Element {
       .catch(() => {
         setVerificationResult({
           found: [],
-          notFound: projectNames,
-          error: "Verification unavailable. Projects may still have been created successfully.",
+          notFound: [],
+          error:
+            "Couldn't check your projects right now. They may still have been created.",
         });
       })
       .finally(() => setVerifying(false));
-  }, [
-    loading,
-    manifest,
-    orchestratorStatus,
-    selectedWorkspaceIds,
-    verifying,
-    verificationResult,
-  ]);
+  }, [target, loading, manifest, result, selectedWorkspaceIds, verifying, verificationResult]);
 
   const handleExport = useCallback(() => {
     if (manifest) exportManifest(manifest);
   }, [manifest]);
 
+  const handleDeleteData = useCallback(async () => {
+    setDeleteError(null);
+    try {
+      if (manifestId) await deleteManifestAndFiles(manifestId);
+      reset();
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : String(err));
+    }
+  }, [manifestId, reset]);
+
   // ─── Loading State ──────────────────────────────────────────
 
-  if (loading) {
+  if (loading || !result) {
     return (
       <div className="flex flex-1 items-center justify-center">
-        <p className="text-sm text-gray-400">Loading results...</p>
+        <p className="text-sm text-gray-600" role="status">
+          Loading results...
+        </p>
       </div>
     );
   }
@@ -214,17 +289,18 @@ export default function Complete(): React.JSX.Element {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-4 text-center">
         <h2 className="text-lg font-semibold text-gray-900">
-          Migration Complete
+          Migration finished
         </h2>
-        <p className="text-sm text-gray-500">
-          Migration data is no longer available.
+        <p className="text-sm text-gray-600">
+          The extracted data is no longer available, so there is no summary to
+          show.
         </p>
         <button
           type="button"
           onClick={reset}
-          className="rounded-lg bg-blue-600 px-6 py-2 text-sm font-medium text-white hover:bg-blue-700"
+          className="rounded-lg bg-blue-700 px-6 py-2 text-sm font-medium text-white hover:bg-blue-800"
         >
-          Start New Migration
+          Start new migration
         </button>
       </div>
     );
@@ -232,16 +308,10 @@ export default function Complete(): React.JSX.Element {
 
   // ─── Build summary data ──────────────────────────────────
 
-  const failedMap = new Map(
-    (orchestratorStatus?.failedWorkspaces ?? []).map((f) => [f.id, f.error]),
-  );
-  const completedIds = new Set(
-    orchestratorStatus?.completedWorkspaceIds ?? [],
-  );
-  const verifiedNames = new Set(verificationResult?.found ?? []);
-  const apiVerifiedIds = new Set(
-    orchestratorStatus?.verifiedWorkspaceIds ?? [],
-  );
+  // A failed lookup (no Claude tab, signed out) proves nothing either way.
+  const verificationUsable = !!verificationResult && !verificationResult.error;
+  const verifiedNames = new Set(verificationUsable ? verificationResult.found : []);
+  const notFoundNames = new Set(verificationUsable ? verificationResult.notFound : []);
 
   const selectedWorkspaces = manifest.workspaces.filter((ws) =>
     selectedWorkspaceIds.includes(ws.id),
@@ -249,43 +319,44 @@ export default function Complete(): React.JSX.Element {
 
   const workspaceSummaries: WorkspaceSummary[] = selectedWorkspaces.map(
     (ws) => {
-      const failed = failedMap.has(ws.id);
-      const apiVerified = apiVerifiedIds.has(ws.id);
-      const status = classifyWorkspace(ws, failed, apiVerified);
-      // Use API verification if available, fall back to DOM-based verification
-      const verified = apiVerified || (verificationResult ? verifiedNames.has(ws.name) : undefined);
+      const status = classifyWorkspace(ws, result, target);
+      let verified: boolean | undefined;
+      const checkedInRun = result.verified.has(ws.id);
+      const problemsInRun = result.followUps.has(ws.id);
+      if (checkedInRun || (!problemsInRun && verifiedNames.has(ws.name))) {
+        verified = true;
+      } else if (notFoundNames.has(ws.name) && status !== "skipped" && status !== "failed") {
+        verified = false;
+      }
       return {
         id: ws.id,
         name: ws.name,
         status,
-        error: failedMap.get(ws.id),
-        fileCount: ws.knowledgeFiles.filter((f) => f.compatible).length,
+        error: result.failed.get(ws.id) ?? result.manual.get(ws.id),
+        fileCount: result.filesDelivered.get(ws.id) ?? 0,
         warnings: ws.migration.warnings,
-        verified: verified === false ? undefined : verified,
+        verified,
       };
     },
   );
 
-  const memoryItemCount = manifest.memory.length;
-  const totalFileCount = selectedWorkspaces.reduce(
-    (sum, ws) => sum + ws.knowledgeFiles.filter((f) => f.compatible).length,
-    0,
-  );
-  const durationMs = migrationStartedAt
-    ? Date.now() - migrationStartedAt
-    : null;
+  const migratedCount = workspaceSummaries.filter(
+    (w) => w.status === "success" || w.status === "partial",
+  ).length;
+  const totalFileCount = workspaceSummaries.reduce((s, w) => s + w.fileCount, 0);
+  const projectMemoryCount = selectedWorkspaces.filter(
+    (ws) => result.projectMemory.has(ws.id) && hasProjectMemory(ws),
+  ).length;
+  const durationMs = migrationStartedAt ? Date.now() - migrationStartedAt : null;
 
-  const followUpItems = buildFollowUpItems(
-    selectedWorkspaces,
-    new Set(failedMap.keys()),
-  );
+  const followUpItems = buildFollowUpItems(selectedWorkspaces, result, target);
 
   const allFailed =
-    workspaceSummaries.length > 0 &&
-    workspaceSummaries.every((ws) => ws.status === "failed");
+    workspaceSummaries.length > 0 && migratedCount === 0;
   const allSuccess =
     workspaceSummaries.length > 0 &&
     workspaceSummaries.every((ws) => ws.status === "success");
+  const noun = PLATFORM_ITEM_NOUN[target];
 
   // ─── Render ─────────────────────────────────────────────
 
@@ -295,36 +366,33 @@ export default function Complete(): React.JSX.Element {
       <div className="flex items-center gap-3">
         <div
           className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${
-            allFailed
-              ? "bg-red-100"
-              : allSuccess
-                ? "bg-green-100"
-                : "bg-amber-100"
+            allFailed ? "bg-red-100" : allSuccess ? "bg-green-100" : "bg-amber-100"
           }`}
+          aria-hidden="true"
         >
           <span
             className={`text-lg ${
               allFailed
-                ? "text-red-600"
+                ? "text-red-700"
                 : allSuccess
-                  ? "text-green-600"
-                  : "text-amber-600"
+                  ? "text-green-700"
+                  : "text-amber-700"
             }`}
           >
-            {allFailed ? "\u2717" : allSuccess ? "\u2713" : "\u26A0"}
+            {allFailed ? "✗" : allSuccess ? "✓" : "⚠"}
           </span>
         </div>
         <div>
           <h2 className="text-lg font-semibold text-gray-900">
             {allFailed
-              ? "Migration Failed"
+              ? "Nothing was migrated"
               : allSuccess
-                ? "Migration Complete"
-                : "Migration Completed with Warnings"}
+                ? "Migration complete"
+                : "Migration complete, with follow-ups"}
           </h2>
-          <p className="text-xs text-gray-500">
-            {completedIds.size} of {selectedWorkspaces.length} workspace
-            {selectedWorkspaces.length !== 1 ? "s" : ""} migrated to Claude
+          <p className="text-xs text-gray-600">
+            {migratedCount} of {selectedWorkspaces.length} workspace
+            {selectedWorkspaces.length !== 1 ? "s" : ""} migrated to {targetName}
           </p>
         </div>
       </div>
@@ -332,42 +400,91 @@ export default function Complete(): React.JSX.Element {
       {/* Summary */}
       <MigrationSummary
         workspaces={workspaceSummaries}
-        memoryItemCount={memoryItemCount}
+        memoryItemCount={result.memoryImported === true ? manifest.memory.length : 0}
         totalFileCount={totalFileCount}
+        projectMemoryCount={projectMemoryCount}
         durationMs={durationMs}
         verificationResult={verificationResult}
         verifying={verifying}
+        targetName={targetName}
       />
 
       {/* Manual Follow-Up */}
       {followUpItems.length > 0 && <ManualFollowUp items={followUpItems} />}
 
-      {/* View on Claude link */}
+      {/* Memory import that was skipped during the run */}
+      {result.memoryImported === false && memorySteps.length > 0 && (
+        <section className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+          <h3 className="text-sm font-medium text-amber-900">
+            Your memory isn&apos;t in {targetName} yet
+          </h3>
+          <p className="mt-1 text-xs text-amber-900">
+            Some memory steps were skipped. Here they are again.
+          </p>
+          <div className="mt-2 space-y-2">
+            {memorySteps.map((step, i) => (
+              <StepCard
+                key={step.id}
+                step={step}
+                stepNumber={i + 1}
+                totalSteps={memorySteps.length}
+                done={memoryDone.has(step.id)}
+                onToggleDone={() =>
+                  setMemoryDone((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(step.id)) next.delete(step.id);
+                    else next.add(step.id);
+                    return next;
+                  })
+                }
+              />
+            ))}
+          </div>
+        </section>
+      )}
+
       <a
-        href="https://claude.ai/projects"
+        href={PLATFORM_HOME_URLS[target]}
         target="_blank"
         rel="noopener noreferrer"
-        className="text-center text-xs font-medium text-blue-600 hover:underline"
+        className="text-center text-xs font-medium text-blue-800 hover:underline"
       >
-        View your projects on Claude &rarr;
+        Open your {noun === "Gem" ? "Gems" : `${noun}s`} in {targetName} &rarr;
       </a>
 
       {/* Action buttons */}
-      <div className="flex gap-2 border-t border-gray-200 pt-3">
-        <button
-          type="button"
-          onClick={handleExport}
-          className="flex-1 rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
-        >
-          Export Manifest
-        </button>
-        <button
-          type="button"
-          onClick={reset}
-          className="flex-1 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-        >
-          Start New Migration
-        </button>
+      <div className="flex flex-col gap-2 border-t border-gray-200 pt-3">
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={handleExport}
+            className="flex-1 rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50"
+          >
+            Export backup (JSON)
+          </button>
+          <button
+            type="button"
+            onClick={reset}
+            className="flex-1 rounded-lg bg-blue-700 px-4 py-2 text-sm font-medium text-white hover:bg-blue-800"
+          >
+            Start new migration
+          </button>
+        </div>
+        <div className="text-center">
+          <ConfirmButton
+            label="Delete the data PortSmith extracted"
+            question="Delete the extracted copy (instructions, files, memory) from this browser?"
+            confirmLabel="Delete"
+            cancelLabel="Keep it"
+            onConfirm={() => void handleDeleteData()}
+            className="text-xs text-gray-600 underline hover:text-red-700"
+          />
+          {deleteError && (
+            <p className="mt-1 text-xs text-red-800" role="alert">
+              {deleteError}
+            </p>
+          )}
+        </div>
       </div>
     </div>
   );

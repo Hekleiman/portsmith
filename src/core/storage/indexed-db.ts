@@ -42,6 +42,23 @@ export interface MigrationStateSnapshot {
     string,
     "autofilled" | "clipboard" | "manual" | "none" | "pending"
   >;
+  /** Results so far, so a resumed run can report them accurately */
+  failedWorkspaces?: Array<{ id: string; name: string; error: string }>;
+  manualWorkspaces?: Array<{ id: string; name: string; reason: string }>;
+  verifiedWorkspaceIds?: string[];
+  /**
+   * Workspaces that already exist on the target. A resumed run never
+   * creates these again, even if the previous run stopped part way through.
+   */
+  createdWorkspaceIds?: string[];
+  /** Things that still need the user, per workspace */
+  followUps?: Record<string, string[]>;
+  /** Knowledge files that reached the target, per workspace */
+  filesDelivered?: Record<string, number>;
+  /** Workspaces whose project memory reached the target */
+  projectMemoryWorkspaceIds?: string[];
+  /** Whether the user finished the memory import steps */
+  memoryImported?: boolean;
 }
 
 export type MigrationPhase =
@@ -78,15 +95,49 @@ export class PortsmithDB extends Dexie {
   }
 }
 
-// Mutable so tests can reset. Use `db` directly everywhere.
-// eslint-disable-next-line import/no-mutable-exports
-export let db = new PortsmithDB();
+export const db = new PortsmithDB();
 
-/** Reset the database for test isolation. NOT for production use. */
+/**
+ * Empty every table (test isolation). Runs as a read-write transaction, so
+ * it queues behind writes that are still in flight instead of aborting
+ * them the way closing and deleting the database did.
+ */
 export async function _resetForTests(): Promise<void> {
-  db.close();
-  await db.delete();
-  db = new PortsmithDB();
+  await clearAllData();
+}
+
+/** Delete everything PortSmith stored in IndexedDB. */
+export async function clearAllData(): Promise<void> {
+  await db.transaction("rw", db.manifests, db.files, db.checkpoints, async () => {
+    await Promise.all([
+      db.manifests.clear(),
+      db.files.clear(),
+      db.checkpoints.clear(),
+    ]);
+  });
+}
+
+export interface StorageSummary {
+  manifests: number;
+  files: number;
+  checkpoints: number;
+  /** Rough size of stored file contents, in bytes */
+  fileBytes: number;
+}
+
+export async function getStorageSummary(): Promise<StorageSummary> {
+  const [manifests, checkpoints] = await Promise.all([
+    db.manifests.count(),
+    db.checkpoints.count(),
+  ]);
+  // Walk the files one at a time instead of loading every blob at once.
+  let files = 0;
+  let fileBytes = 0;
+  await db.files.each((f) => {
+    files++;
+    fileBytes += Math.floor((f.blob.length * 3) / 4);
+  });
+  return { manifests, files, checkpoints, fileBytes };
 }
 
 // ─── Manifest CRUD ───────────────────────────────────────────
@@ -130,14 +181,40 @@ export async function loadFile(id: string): Promise<FileRecord | undefined> {
   return db.files.get(id);
 }
 
+export async function deleteFiles(ids: string[]): Promise<void> {
+  if (ids.length > 0) await db.files.bulkDelete(ids);
+}
+
+/**
+ * Delete a manifest and the file contents it references, e.g. once a
+ * migration is finished and the user no longer needs the extracted copy.
+ */
+export async function deleteManifestAndFiles(id: string): Promise<void> {
+  const record = await db.manifests.get(id);
+  const refs =
+    record?.data.workspaces.flatMap((w) =>
+      w.knowledgeFiles
+        .map((f) => f.contentRef)
+        .filter((r): r is string => typeof r === "string"),
+    ) ?? [];
+  await db.transaction("rw", db.manifests, db.files, async () => {
+    await db.manifests.delete(id);
+    if (refs.length > 0) await db.files.bulkDelete(refs);
+  });
+}
+
 // ─── Checkpoint CRUD ────────────────────────────────────────
+
+const MAX_CHECKPOINTS = 20;
+let checkpointSeq = 0;
 
 export async function saveCheckpoint(
   state: MigrationStateSnapshot,
   workspaceIndex: number,
   stepIndex: number,
 ): Promise<string> {
-  const id = `ckpt-${Date.now()}`;
+  // Unique even when two contexts write within the same millisecond.
+  const id = `ckpt-${Date.now()}-${(checkpointSeq++).toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   await db.checkpoints.put({
     id,
     migrationState: state,
@@ -145,6 +222,16 @@ export async function saveCheckpoint(
     workspaceIndex,
     stepIndex,
   });
+
+  // Keep the table small: only recent checkpoints are ever read.
+  const count = await db.checkpoints.count();
+  if (count > MAX_CHECKPOINTS) {
+    const stale = await db.checkpoints
+      .orderBy("timestamp")
+      .limit(count - MAX_CHECKPOINTS)
+      .primaryKeys();
+    await db.checkpoints.bulkDelete(stale);
+  }
   return id;
 }
 

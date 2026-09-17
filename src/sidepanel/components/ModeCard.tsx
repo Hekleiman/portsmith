@@ -7,6 +7,9 @@ export interface ModeCardProps {
   cons: string[];
   selected: boolean;
   onClick: () => void;
+  disabled?: boolean;
+  /** Why the mode is unavailable (shown when disabled) */
+  disabledReason?: string;
 }
 
 export default function ModeCard({
@@ -18,15 +21,21 @@ export default function ModeCard({
   cons,
   selected,
   onClick,
+  disabled = false,
+  disabledReason,
 }: ModeCardProps): React.JSX.Element {
   return (
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
+      aria-pressed={selected}
       className={`flex w-full flex-col rounded-lg border-2 p-3 text-left transition-colors ${
         selected
           ? "border-blue-600 bg-blue-50"
-          : "border-gray-200 hover:border-blue-300 hover:bg-gray-50"
+          : disabled
+            ? "cursor-not-allowed border-gray-100 bg-gray-50 opacity-70"
+            : "border-gray-200 hover:border-blue-300 hover:bg-gray-50"
       }`}
     >
       <div className="flex w-full items-center gap-3">
@@ -37,20 +46,23 @@ export default function ModeCard({
             <span
               className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
                 selected
-                  ? "bg-blue-200 text-blue-800"
-                  : "bg-gray-100 text-gray-600"
+                  ? "bg-blue-200 text-blue-900"
+                  : "bg-gray-100 text-gray-700"
               }`}
             >
               {badge}
             </span>
           </div>
-          <p className="mt-0.5 text-xs text-gray-500">{description}</p>
+          <p className="mt-0.5 text-xs text-gray-600">
+            {disabled && disabledReason ? disabledReason : description}
+          </p>
         </div>
         {selected && (
           <svg
-            className="h-5 w-5 shrink-0 text-blue-600"
+            className="h-5 w-5 shrink-0 text-blue-700"
             viewBox="0 0 20 20"
             fill="currentColor"
+            aria-hidden="true"
           >
             <path
               fillRule="evenodd"
@@ -75,7 +87,7 @@ export default function ModeCard({
         <div className="flex-1">
           <ul className="space-y-0.5">
             {cons.map((con) => (
-              <li key={con} className="flex items-start gap-1 text-[11px] text-gray-400">
+              <li key={con} className="flex items-start gap-1 text-[11px] text-gray-600">
                 <span className="mt-px shrink-0">&minus;</span>
                 <span>{con}</span>
               </li>

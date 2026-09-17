@@ -3,34 +3,65 @@ import { initMessageRouter, onMessage } from "@/shared/messaging";
 import { registerOrchestratorHandlers } from "./migration-orchestrator";
 import { verifyProjects } from "@/core/adapters/claude-verifier";
 import { saveFile } from "@/core/storage/indexed-db";
+import { normalizeGizmoId } from "@/shared/chatgpt-ids";
 
 console.log(`${APP_NAME} service worker started (v${APP_VERSION})`);
 
 initMessageRouter();
 registerOrchestratorHandlers();
 
-// Open side panel when the extension icon is clicked (no popup needed)
-chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+// Clicking the toolbar icon opens the side panel. (The manifest has no
+// default_popup: a popup would take precedence over this behavior.)
+chrome.sidePanel
+  .setPanelBehavior({ openPanelOnActionClick: true })
+  .catch((err: unknown) => {
+    console.warn(`[${APP_NAME}] Could not set side panel behavior:`, err);
+  });
 
-// ─── Track active ChatGPT tabs ──────────────────────────────
-// Content scripts send PAGE_STATE when they load. We record the
-// tab so other extension contexts can locate it if needed.
+// ─── Sender checks ──────────────────────────────────────────
+// Only our own content scripts on these hosts, or our own extension pages,
+// may use the privileged handlers below.
 
-const platformTabs = new Map<string, number>();
-
-onMessage("PAGE_STATE", (payload, sender) => {
-  const tabId = sender.tab?.id;
-  if (tabId !== undefined) {
-    platformTabs.set(payload.platform, tabId);
-    console.log(
-      `[${APP_NAME}] Registered ${payload.platform} tab ${tabId}: ${payload.url}`,
-    );
+function senderHost(sender: chrome.runtime.MessageSender): string | null {
+  try {
+    return sender.url ? new URL(sender.url).host : null;
+  } catch {
+    return null;
   }
-});
+}
+
+function isFromExtensionPage(sender: chrome.runtime.MessageSender): boolean {
+  return (
+    sender.id === chrome.runtime.id &&
+    (sender.url ?? "").startsWith(`chrome-extension://${chrome.runtime.id}/`)
+  );
+}
+
+function isFromContentScript(
+  sender: chrome.runtime.MessageSender,
+  hosts: string[],
+): boolean {
+  const host = senderHost(sender);
+  return (
+    sender.id === chrome.runtime.id &&
+    sender.tab?.id !== undefined &&
+    host !== null &&
+    hosts.includes(host)
+  );
+}
+
+const CONTENT_SCRIPT_HOSTS = ["chatgpt.com", "claude.ai", "gemini.google.com"];
+
+// Content scripts announce themselves with PAGE_STATE. Nothing needs the
+// tab registry today, so the message is just acknowledged.
+onMessage("PAGE_STATE", () => undefined);
 
 // ─── Project Verification ───────────────────────────────────
 
-onMessage("VERIFY_PROJECTS", async (payload) => {
+onMessage("VERIFY_PROJECTS", async (payload, sender) => {
+  if (!isFromExtensionPage(sender)) {
+    return { found: [], notFound: payload.projectNames, error: "Not allowed" };
+  }
   return verifyProjects(payload.projectNames);
 });
 
@@ -79,27 +110,41 @@ async function getChatGPTAccessToken(tabId: number): Promise<string | null> {
 
 onMessage("FETCH_GIZMO_API", async (payload, sender) => {
   const tabId = sender.tab?.id;
-  if (tabId === undefined) return { error: "No tab ID" };
+  if (tabId === undefined || !isFromContentScript(sender, ["chatgpt.com"])) {
+    return { error: "Not allowed" };
+  }
+
+  const bareId = normalizeGizmoId(payload.gizmoId);
+  if (!bareId) return { error: `Unrecognized gizmo ID: ${payload.gizmoId}` };
 
   const token = await getChatGPTAccessToken(tabId);
   if (!token) return { error: "Could not retrieve ChatGPT access token" };
 
+  // Try the bare ID first; project URLs carry a readable slug after it.
+  const candidates = [...new Set([bareId, payload.gizmoId])];
+
   const [result] = await chrome.scripting.executeScript({
     target: { tabId },
     world: "MAIN",
-    func: async (gizmoId: string, accessToken: string) => {
-      try {
-        const resp = await fetch(
-          `https://chatgpt.com/backend-api/gizmos/${gizmoId}`,
-          { headers: { Authorization: `Bearer ${accessToken}` } },
-        );
-        if (!resp.ok) return { error: `HTTP ${resp.status}` };
-        return await resp.json();
-      } catch (e) {
-        return { error: String(e) };
+    func: async (ids: string[], accessToken: string) => {
+      let lastError = "";
+      for (const id of ids) {
+        try {
+          const resp = await fetch(
+            `https://chatgpt.com/backend-api/gizmos/${encodeURIComponent(id)}`,
+            { headers: { Authorization: `Bearer ${accessToken}` } },
+          );
+          if (resp.ok) return await resp.json();
+          lastError = `HTTP ${resp.status}`;
+          if (resp.status !== 404) break;
+        } catch (e) {
+          lastError = String(e);
+          break;
+        }
       }
+      return { error: lastError || "Request failed" };
     },
-    args: [payload.gizmoId, token],
+    args: [candidates, token],
   });
 
   return result?.result ?? { error: "executeScript failed" };
@@ -109,7 +154,10 @@ onMessage("FETCH_GIZMO_API", async (payload, sender) => {
 // Content script downloads file blobs directly (same-origin fetch),
 // then sends the base64 blob here for IndexedDB storage.
 
-onMessage("STORE_DOWNLOADED_FILE", async (payload) => {
+onMessage("STORE_DOWNLOADED_FILE", async (payload, sender) => {
+  if (!isFromContentScript(sender, CONTENT_SCRIPT_HOSTS)) {
+    return { success: false, error: "Not allowed" };
+  }
   try {
     const contentRef = `file-${payload.fileId}`;
     await saveFile(contentRef, payload.blob, payload.mimeType, payload.fileName);
@@ -122,14 +170,19 @@ onMessage("STORE_DOWNLOADED_FILE", async (payload) => {
 });
 
 // ─── Main-World Click Execution ─────────────────────────────
-// Content scripts run in an ISOLATED world — synthetic events they dispatch
-// are untrusted and Radix UI ignores them. This handler uses
-// chrome.scripting.executeScript with world:'MAIN' so the click runs
-// in the page's own JS context and is treated as a real user event.
+// Used by the DOM fallbacks. Dispatching from the page's MAIN world makes
+// the events come from the page's own realm, which some React/Radix
+// components handle more reliably than events built in the content
+// script's isolated world. (They are still untrusted events.)
 
 onMessage("CLICK_IN_MAIN_WORLD", async (payload, sender) => {
   const tabId = sender.tab?.id;
-  if (tabId === undefined) return false;
+  if (
+    tabId === undefined ||
+    !isFromContentScript(sender, ["chatgpt.com", "claude.ai"])
+  ) {
+    return false;
+  }
 
   const [result] = await chrome.scripting.executeScript({
     target: { tabId },
@@ -186,38 +239,28 @@ onMessage("CLICK_IN_MAIN_WORLD", async (payload, sender) => {
         await new Promise((r) => setTimeout(r, 150));
       }
 
-      // ── Compute click coordinates ─────────────────────────
+      // ── Dispatch one complete pointer/mouse sequence ─────
+      // Radix menus open on pointerdown; ordinary buttons react to the
+      // single click at the end. (The old version fired el.click(),
+      // requestSubmit() and two more click events, so toggles flipped
+      // several times and form buttons could submit more than once.)
       const rect = el.getBoundingClientRect();
-      const cx = rect.left + rect.width / 2;
-      const cy = rect.top + rect.height / 2;
-
-      // ── Strategy 1: native .click() ──────────────────────
-      el.click();
-
-      // ── Strategy 2: form.requestSubmit() for form buttons ─
-      if (el instanceof HTMLButtonElement && el.form) {
-        try {
-          el.form.requestSubmit(el);
-        } catch {
-          // Not all forms support requestSubmit
-        }
-      }
-
-      // ── Strategy 3: dispatch full event sequence ──────────
       const opts = {
         bubbles: true,
         cancelable: true,
+        composed: true,
         view: window,
-        clientX: cx,
-        clientY: cy,
+        button: 0,
+        clientX: rect.left + rect.width / 2,
+        clientY: rect.top + rect.height / 2,
         pointerId: 1,
         pointerType: "mouse" as const,
+        isPrimary: true,
       };
       el.dispatchEvent(new PointerEvent("pointerdown", opts));
       el.dispatchEvent(new MouseEvent("mousedown", opts));
       el.dispatchEvent(new PointerEvent("pointerup", opts));
       el.dispatchEvent(new MouseEvent("mouseup", opts));
-      el.dispatchEvent(new PointerEvent("click", opts));
       el.dispatchEvent(new MouseEvent("click", opts));
 
       return true;
@@ -231,10 +274,4 @@ onMessage("CLICK_IN_MAIN_WORLD", async (payload, sender) => {
 // Clean up when tabs are closed
 chrome.tabs.onRemoved.addListener((tabId) => {
   accessTokenCache.delete(tabId);
-  for (const [platform, id] of platformTabs) {
-    if (id === tabId) {
-      platformTabs.delete(platform);
-      break;
-    }
-  }
 });

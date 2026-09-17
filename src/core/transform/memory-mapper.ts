@@ -6,8 +6,10 @@ import type { MemoryItem } from "@/core/schema/types";
 
 // ─── Constants ───────────────────────────────────────────────
 
+// Soft length hint: long facts are flagged (with a shortened version) so
+// the review screen can point them out. Nothing is dropped: memory is
+// delivered through the targets' import features as one block of text.
 const CLAUDE_MAX_MEMORY_CHARS = 200;
-const CLAUDE_MAX_MEMORY_ITEMS = 30;
 
 // ─── Category Detection ─────────────────────────────────────
 
@@ -118,13 +120,14 @@ function truncateToLimit(text: string, maxChars: number): string {
 
 export function mapMemoryItems(rawMemory: string[]): MemoryItem[] {
   const items: MemoryItem[] = [];
+  const seen = new Set<string>();
 
-  // Limit to Claude's max items
-  const capped = rawMemory.slice(0, CLAUDE_MAX_MEMORY_ITEMS);
-
-  for (let i = 0; i < capped.length; i++) {
-    const fact = capped[i]!.trim();
+  for (let i = 0; i < rawMemory.length; i++) {
+    const fact = (rawMemory[i] ?? "").trim();
     if (!fact) continue;
+    const key = fact.replace(/\s+/g, " ").toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
 
     const { category, priority } = categorize(fact);
     const fitsConstraints = fact.length <= CLAUDE_MAX_MEMORY_CHARS;
@@ -159,4 +162,4 @@ export function mapMemoryItems(rawMemory: string[]): MemoryItem[] {
   return items;
 }
 
-export { CLAUDE_MAX_MEMORY_CHARS, CLAUDE_MAX_MEMORY_ITEMS };
+export { CLAUDE_MAX_MEMORY_CHARS };

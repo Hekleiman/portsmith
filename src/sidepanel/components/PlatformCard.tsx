@@ -1,11 +1,12 @@
 export interface PlatformCardProps {
-  id: string;
   name: string;
   description: string;
   icon: React.ReactNode;
   selected: boolean;
   disabled: boolean;
   onClick: () => void;
+  /** Small label next to the name (e.g. "Guided only") */
+  badge?: string;
 }
 
 export default function PlatformCard({
@@ -15,12 +16,14 @@ export default function PlatformCard({
   selected,
   disabled,
   onClick,
+  badge,
 }: PlatformCardProps): React.JSX.Element {
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled}
+      aria-pressed={selected}
       className={`flex w-full items-center gap-3 rounded-lg border-2 p-3 text-left transition-colors ${
         selected
           ? "border-blue-600 bg-blue-50"
@@ -33,27 +36,28 @@ export default function PlatformCard({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span
-            className={`text-sm font-semibold ${disabled ? "text-gray-400" : "text-gray-900"}`}
+            className={`text-sm font-semibold ${disabled ? "text-gray-500" : "text-gray-900"}`}
           >
             {name}
           </span>
-          {disabled && (
-            <span className="rounded-full bg-gray-200 px-2 py-0.5 text-[10px] font-medium text-gray-500">
-              Coming Soon
+          {(badge ?? (disabled ? "Coming soon" : undefined)) && (
+            <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-700">
+              {badge ?? "Coming soon"}
             </span>
           )}
         </div>
         <p
-          className={`mt-0.5 text-xs ${disabled ? "text-gray-400" : "text-gray-500"}`}
+          className={`mt-0.5 text-xs ${disabled ? "text-gray-500" : "text-gray-600"}`}
         >
           {description}
         </p>
       </div>
       {selected && (
         <svg
-          className="h-5 w-5 shrink-0 text-blue-600"
+          className="h-5 w-5 shrink-0 text-blue-700"
           viewBox="0 0 20 20"
           fill="currentColor"
+          aria-hidden="true"
         >
           <path
             fillRule="evenodd"

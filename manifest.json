@@ -1,16 +1,20 @@
 {
   "manifest_version": 3,
   "name": "PortSmith",
-  "version": "0.3.0",
-  "description": "Migrate AI assistant configurations between platforms",
-  "permissions": ["storage", "sidePanel", "scripting", "clipboardWrite", "windows"],
+  "version": "0.4.0",
+  "description": "Move your AI setup between ChatGPT, Claude and Gemini: projects, GPTs, Gems, files and memory. Private and in-browser.",
+  "minimum_chrome_version": "116",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "permissions": ["storage", "sidePanel", "scripting"],
   "host_permissions": [
     "https://chatgpt.com/*",
     "https://claude.ai/*",
     "https://gemini.google.com/*"
-  ],
-  "optional_host_permissions": [
-    "https://chat.openai.com/*"
   ],
   "background": {
     "service_worker": "src/background/service-worker.ts",
@@ -20,7 +24,11 @@
     "default_path": "src/sidepanel/index.html"
   },
   "action": {
-    "default_popup": "src/popup/index.html"
+    "default_title": "Open PortSmith",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png"
+    }
   },
   "content_scripts": [
     {

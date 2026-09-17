@@ -11,10 +11,12 @@ import {
   clearMigrationHistory,
   createInitialState,
 } from "@/core/storage/migration-state";
+import { sendMessage } from "@/shared/messaging";
 import {
   getPreference,
   setPreference,
 } from "@/core/storage/preferences";
+import { supportedModesForTarget } from "@/core/platforms";
 
 // ─── Phase / Step mapping ────────────────────────────────────
 
@@ -72,6 +74,38 @@ interface ResumeData {
   stepIndex: number;
 }
 
+/** Phases worth offering to resume after the panel was closed. */
+const RESUMABLE_PHASES: MigrationPhase[] = [
+  "review",
+  "editing",
+  "mode_selection",
+  "migrating",
+  "verification",
+];
+
+/** Phases whose checkpoints the side panel writes (the service worker owns "migrating"). */
+const PANEL_CHECKPOINT_PHASES: MigrationPhase[] = [
+  "target_selection",
+  "extraction_method",
+  "extracting",
+  "review",
+  "editing",
+  "mode_selection",
+];
+
+/** Ask the service worker to drop any run it still holds. */
+function cancelOrchestrator(): void {
+  try {
+    if (typeof chrome !== "undefined" && typeof chrome.runtime?.sendMessage === "function") {
+      void sendMessage("MIGRATION_CANCEL").catch(() => {
+        // Service worker not running: nothing to cancel
+      });
+    }
+  } catch {
+    // Not in an extension context (tests)
+  }
+}
+
 interface MigrationState {
   phase: MigrationPhase;
   sourcePlatform: string | null;
@@ -86,6 +120,14 @@ interface MigrationState {
   pendingResume: ResumeData | null;
   resumeChecked: boolean;
   migrationStartedAt: number | null;
+  /** True when the Migrate page should resume the service worker's run */
+  resumedMigration: boolean;
+  /**
+   * Manifest whose workspaces were already pre-selected on the Review page.
+   * After that, an empty selection is the user's (or a stopped run's)
+   * choice and must not snap back to "everything".
+   */
+  reviewedManifestId: string | null;
 }
 
 interface MigrationActions {
@@ -100,6 +142,7 @@ interface MigrationActions {
   toggleWorkspace: (id: string) => void;
   setEditingWorkspaceId: (id: string | null) => void;
   setDeliveryMode: (mode: DeliveryMode) => void;
+  setReviewedManifestId: (id: string | null) => void;
   reset: () => void;
   checkForResume: () => Promise<void>;
   acceptResume: () => void;
@@ -131,7 +174,10 @@ export function canProceed(state: MigrationState): boolean {
     case "source_selection":
       return state.sourcePlatform !== null;
     case "target_selection":
-      return state.targetPlatform !== null;
+      return (
+        state.targetPlatform !== null &&
+        state.targetPlatform !== state.sourcePlatform
+      );
     case "extraction_method":
       return state.extractionMethod !== null;
     case "extracting":
@@ -140,7 +186,7 @@ export function canProceed(state: MigrationState): boolean {
     case "editing":
       return state.selectedWorkspaceIds.length > 0;
     case "mode_selection":
-      return state.deliveryMode !== null;
+      return state.deliveryMode !== null && state.selectedWorkspaceIds.length > 0;
     default:
       return true;
   }
@@ -154,6 +200,8 @@ export const useMigrationStore = create<MigrationStore>((set, get) => ({
   pendingResume: null,
   resumeChecked: false,
   migrationStartedAt: null,
+  resumedMigration: false,
+  reviewedManifestId: null,
 
   nextStep: () => {
     const { phase } = get();
@@ -226,13 +274,32 @@ export const useMigrationStore = create<MigrationStore>((set, get) => ({
   },
 
   setSourcePlatform: (platform) => {
-    set({ sourcePlatform: platform });
-    void setPreference("lastSourcePlatform", platform);
+    const { sourcePlatform, targetPlatform } = get();
+    if (platform === sourcePlatform) return;
+    set({
+      sourcePlatform: platform,
+      // A different source means earlier extraction results no longer apply.
+      manifestId: null,
+      selectedWorkspaceIds: [],
+      editingWorkspaceId: null,
+      extractionMethod: null,
+      // Migrating a platform into itself is never what the user wants.
+      ...(targetPlatform === platform ? { targetPlatform: null } : {}),
+    });
+    void setPreference("lastSourcePlatform", platform).catch(() => {});
   },
 
   setTargetPlatform: (platform) => {
-    set({ targetPlatform: platform });
-    void setPreference("lastTargetPlatform", platform);
+    const { sourcePlatform, deliveryMode } = get();
+    if (platform === sourcePlatform) return;
+    const modes = supportedModesForTarget(platform);
+    set({
+      targetPlatform: platform,
+      ...(deliveryMode && !modes.includes(deliveryMode)
+        ? { deliveryMode: modes[0] ?? null }
+        : {}),
+    });
+    void setPreference("lastTargetPlatform", platform).catch(() => {});
   },
 
   setExtractionMethod: (method) => {
@@ -263,6 +330,10 @@ export const useMigrationStore = create<MigrationStore>((set, get) => ({
     set({ deliveryMode: mode });
   },
 
+  setReviewedManifestId: (id) => {
+    set({ reviewedManifestId: id });
+  },
+
   reset: () => {
     set({
       ...createInitialState(),
@@ -270,52 +341,81 @@ export const useMigrationStore = create<MigrationStore>((set, get) => ({
       pendingResume: null,
       resumeChecked: true,
       migrationStartedAt: null,
+      resumedMigration: false,
+      reviewedManifestId: null,
     });
+    cancelOrchestrator();
     clearMigrationHistory().catch(console.error);
   },
 
   checkForResume: async () => {
-    const data = await resume();
-    if (data) {
-      set({ pendingResume: data, resumeChecked: true });
-    } else {
-      // No checkpoint — load saved platform preferences for repeat migrations
+    try {
+      const data = await resume();
+      if (data && RESUMABLE_PHASES.includes(data.state.phase)) {
+        set({ pendingResume: data, resumeChecked: true });
+        return;
+      }
+
+      // Nothing worth resuming: load saved platforms for repeat migrations
       const [savedSource, savedTarget] = await Promise.all([
         getPreference("lastSourcePlatform"),
         getPreference("lastTargetPlatform"),
       ]);
+      const source = savedSource ?? null;
+      const target = savedTarget && savedTarget !== source ? savedTarget : null;
       set({
         pendingResume: null,
         resumeChecked: true,
-        sourcePlatform: savedSource ?? null,
-        targetPlatform: savedTarget ?? null,
+        sourcePlatform: source,
+        targetPlatform: target,
       });
+    } catch (err) {
+      console.warn("[PortSmith] Could not check for a previous migration:", err);
+      set({ pendingResume: null, resumeChecked: true });
     }
   },
 
   acceptResume: () => {
     const { pendingResume } = get();
-    if (pendingResume) {
-      set({ ...pendingResume.state, pendingResume: null });
-    }
+    if (!pendingResume) return;
+    const snapshot = pendingResume.state;
+    const migrating =
+      snapshot.phase === "migrating" || snapshot.phase === "verification";
+    set({
+      ...snapshot,
+      // The editor needs a workspace id that isn't persisted; reopen Review.
+      phase: snapshot.phase === "editing" ? "review" : snapshot.phase,
+      pendingResume: null,
+      resumedMigration: migrating,
+    });
   },
 
   declineResume: async () => {
-    set({ pendingResume: null });
+    set({ pendingResume: null, resumedMigration: false });
+    cancelOrchestrator();
     await clearMigrationHistory();
   },
 }));
 
-// Auto-checkpoint on every phase change (except idle)
+// Auto-checkpoint on phase changes. The service worker owns checkpoints
+// while migrating (it knows which workspaces are done); writing one here
+// with workspace index 0 used to make a resumed run start over.
 useMigrationStore.subscribe((state, prevState) => {
   // Track migration start time
   if (state.phase === "migrating" && prevState.phase !== "migrating") {
     useMigrationStore.setState({ migrationStartedAt: Date.now() });
   }
 
-  if (state.phase !== prevState.phase && state.phase !== "idle") {
-    const step = phaseToStep(state.phase);
-    checkpoint(snapshotFromState(state), 0, step).catch(console.error);
+  if (state.phase !== prevState.phase) {
+    // "complete" is left alone: the service worker's final checkpoint keeps
+    // the results for the summary page, and it is never offered for resume.
+    if (state.phase === "mode_selection" && prevState.phase === "migrating") {
+      useMigrationStore.setState({ resumedMigration: false });
+    }
+    if (PANEL_CHECKPOINT_PHASES.includes(state.phase)) {
+      const step = phaseToStep(state.phase);
+      checkpoint(snapshotFromState(state), 0, step).catch(console.error);
+    }
     return;
   }
   // Persist workspace selection changes during review

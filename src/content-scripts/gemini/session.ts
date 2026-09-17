@@ -37,7 +37,7 @@ export async function initSession(): Promise<GeminiSession> {
   const accessToken = html.match(/"SNlM0e":\s*"(.*?)"/)?.[1];
   if (!accessToken) {
     throw new Error(
-      "Could not find SNlM0e token — are you logged in to gemini.google.com?",
+      "Could not find Gemini's session token. Are you signed in to gemini.google.com?",
     );
   }
 

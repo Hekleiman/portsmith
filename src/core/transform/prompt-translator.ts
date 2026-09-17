@@ -1,6 +1,17 @@
 // ─── Prompt Translator ───────────────────────────────────────
-// Rule-based translation of ChatGPT-style instructions to Claude-style.
-// V1: no LLM — deterministic regex/string transforms only.
+// Rule-based adaptation of ChatGPT instructions for Claude.
+// No LLM: small, deterministic transforms that must never change what the
+// instructions mean. Every rule skips fenced and inline code.
+//
+// Based on Anthropic's prompting guidance (platform.claude.com, "Prompting
+// best practices", checked Sep 2026):
+// - Role prompts ("You are a ...") work well, so they are left alone.
+// - Newer Claude models over-apply shouted directives ("CRITICAL: You MUST"),
+//   so all-caps directive words are written in normal case.
+// Anything that could be a literal (quoted text, labels, RFC 2119 keywords,
+// lists of capitalized options) is left exactly as written. Markdown
+// structure is kept too: Claude reads headings well, and rewriting them
+// into XML tags risked dropping words.
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -11,7 +22,61 @@ export interface TranslationResult {
 
 export interface TranslationRule {
   name: string;
+  /** Returns the new text, or null when the rule changed nothing. */
   apply: (text: string) => string | null;
+}
+
+// ─── Code masking ───────────────────────────────────────────
+// Code is swapped for placeholders before the rules run and restored
+// afterwards. Placeholders use private-use characters that no rule matches.
+
+const MASK_OPEN = "\uE000";
+const MASK_CLOSE = "\uE001";
+const MASK_RE = new RegExp(`${MASK_OPEN}\\d+${MASK_CLOSE}`, "g");
+
+interface Masked {
+  masked: string;
+  restore: (text: string) => string;
+}
+
+export function maskCode(text: string): Masked {
+  const saved: string[] = [];
+  const keep = (chunk: string): string => {
+    saved.push(chunk);
+    return `${MASK_OPEN}${saved.length - 1}${MASK_CLOSE}`;
+  };
+
+  const out: string[] = [];
+  let fence: RegExp | null = null;
+  let block: string[] = [];
+
+  for (const line of text.split("\n")) {
+    if (fence === null) {
+      const open = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+      if (open?.[1]) {
+        const marker = open[1];
+        fence = new RegExp(`^ {0,3}${marker[0] === "`" ? "`" : "~"}{${marker.length},}\\s*$`);
+        block = [line];
+        continue;
+      }
+      // Inline code spans (`code`, ``code``)
+      out.push(line.replace(/(`+)[^`\n]+?\1(?!`)/g, (m) => keep(m)));
+    } else {
+      block.push(line);
+      if (fence.test(line)) {
+        out.push(keep(block.join("\n")));
+        fence = null;
+        block = [];
+      }
+    }
+  }
+  // An unclosed fence runs to the end of the text
+  if (fence !== null) out.push(keep(block.join("\n")));
+
+  return {
+    masked: out.join("\n"),
+    restore: (t) => t.replace(MASK_RE, (m) => saved[Number(m.slice(1, -1))] ?? m),
+  };
 }
 
 // ─── Capability Detection ────────────────────────────────────
@@ -25,320 +90,237 @@ export interface DetectedCapabilities {
 }
 
 const DALLE_PATTERNS = [
-  /\bdall-?e\b/i,
-  /\bgenerate\s+(an?\s+)?images?\b/i,
-  /\bcreate\s+(an?\s+)?images?\b/i,
+  // DALL-E, DALLE, DALL E and the official "DALL·E"
+  /\bdall[\s\-.\u00B7\u2022]?e\b/i,
+  /\bgpt-image\b/i,
+  /\bgenerate\s+(?:an?\s+)?images?\b/i,
+  /\bcreate\s+(?:an?\s+)?images?\b/i,
   /\bimage\s+generation\b/i,
 ];
 
 const CODE_INTERPRETER_PATTERNS = [
   /\bcode\s+interpreter\b/i,
-  /\brun\s+(python|code)\b/i,
-  /\bexecute\s+(python|code)\b/i,
+  /\badvanced\s+data\s+analysis\b/i,
+  /\b(?:run|execute)\s+(?:the\s+)?(?:python|code)\b/i,
 ];
 
 const BROWSING_PATTERNS = [
-  /\bbrowse\s+the\s+web\b/i,
+  /\bbrowse\s+the\s+(?:web|internet)\b/i,
   /\bweb\s+browsing\b/i,
-  /\bsearch\s+the\s+(internet|web)\b/i,
-  /\bbrowse\s+the\s+internet\b/i,
+  /\bsearch\s+the\s+(?:internet|web)\b/i,
 ];
 
+// "Canvas" is also a school platform, so only ChatGPT phrasing counts.
 const CANVAS_PATTERNS = [
-  /\buse\s+canvas\b/i,
-  /\bcanvas\s+mode\b/i,
-  /\bin\s+canvas\b/i,
+  /\bcanvas\s+(?:mode|tool|feature)\b/i,
+  /\bchatgpt(?:['\u2019]s)?\s+canvas\b/i,
+  /\b(?:open|use)\s+(?:a\s+|the\s+)?canvas\b(?!\s+(?:lms|course|assignment|page|module|quiz|app))/i,
 ];
 
+// "Use action verbs" is not an API action, so require stronger wording.
 const API_ACTIONS_PATTERNS = [
-  /\bapi\s+actions?\b/i,
-  /\bcall\s+(the\s+)?api\b/i,
-  /\buse\s+(the\s+)?actions?\b/i,
+  /\b(?:api|custom|gpt)\s+actions?\b/i,
+  /\bactions?\s+(?:schema|endpoints?)\b/i,
+  /\bopenapi\b/i,
+  /\bcall\s+(?:the\s+)?(?:[\w-]+\s+)?(?:api|endpoint)\b/i,
 ];
 
 export function detectCapabilities(instructions: string): DetectedCapabilities {
+  const text = maskCode(instructions).masked;
   return {
-    usesDallE: DALLE_PATTERNS.some((p) => p.test(instructions)),
-    usesCodeInterpreter: CODE_INTERPRETER_PATTERNS.some((p) =>
-      p.test(instructions),
-    ),
-    usesBrowsing: BROWSING_PATTERNS.some((p) => p.test(instructions)),
-    usesCanvas: CANVAS_PATTERNS.some((p) => p.test(instructions)),
-    usesApiActions: API_ACTIONS_PATTERNS.some((p) => p.test(instructions)),
+    usesDallE: DALLE_PATTERNS.some((p) => p.test(text)),
+    usesCodeInterpreter: CODE_INTERPRETER_PATTERNS.some((p) => p.test(text)),
+    usesBrowsing: BROWSING_PATTERNS.some((p) => p.test(text)),
+    usesCanvas: CANVAS_PATTERNS.some((p) => p.test(text)),
+    usesApiActions: API_ACTIONS_PATTERNS.some((p) => p.test(text)),
   };
 }
 
-// ─── Translation Rules ──────────────────────────────────────
+// ─── Helpers ────────────────────────────────────────────────
+
+/** Whether `offset` in `text` starts a sentence or a list item. */
+function startsSentence(text: string, offset: number): boolean {
+  const lineStart = text.lastIndexOf("\n", offset - 1) + 1;
+  const before = text.slice(lineStart, offset);
+  return (
+    /^\s*(?:(?:[-*+]|\d+[.)])\s+)?(?:\*\*|__)?$/.test(before) ||
+    /[.!?:]\s*(?:\*\*|__)?$/.test(before) ||
+    /[("\u201C]$/.test(before)
+  );
+}
+
+function capitalize(word: string): string {
+  return word.length > 0 ? word[0]!.toUpperCase() + word.slice(1) : word;
+}
+
+// ─── Rules ──────────────────────────────────────────────────
 
 /**
- * Rule 1: Remove role-play framing.
- * "Act as..." / "You are a..." → collaborative tone.
+ * Rule 1: Write shouted directives in normal case.
+ * "NEVER reveal" → "Never reveal", "you MUST cite" → "you must cite".
+ * A word only changes when it reads as a directive: followed by a
+ * lowercase word ("NEVER share"), outside quotes, not after words that
+ * introduce a literal ("reply with", "set to", "the keyword"), and in a
+ * sentence with no other capitalized words ("ALWAYS, SOMETIMES or NEVER").
+ * Texts that cite RFC 2119 are skipped, because there the capitals carry
+ * meaning. Labels such as "IMPORTANT:" are left as written.
  */
-const rolePlayRule: TranslationRule = {
-  name: "remove_roleplay_framing",
+const EMPHASIS_RE =
+  /(?<![A-Za-z0-9_'\u2019-])(?:MUST\s+NOT|DO\s+NOT|DON['\u2019]T|NEVER|ALWAYS|MUST)(?![A-Za-z0-9_'\u2019-])/g;
+const CAPS_WORD_RE = /(?<![A-Za-z0-9_])[A-Z][A-Z'\u2019]+(?![A-Za-z0-9_])/g;
+const DIRECTIVE_WORDS = new Set(["MUST", "NOT", "DO", "DON'T", "DON\u2019T", "NEVER", "ALWAYS"]);
+// Shouted labels that often start a directive ("IMPORTANT: NEVER ...")
+const LABEL_WORDS = new Set(["IMPORTANT", "CRITICAL", "NOTE", "WARNING", "REMEMBER"]);
+// Short all-caps words that are usually acronyms, not shouting
+const ACRONYMS = new Set([
+  "AI", "API", "APIS", "CEO", "CSS", "CSV", "EU", "FAQ", "GPT", "HTML", "HTTP", "HTTPS",
+  "ID", "IDS", "JSON", "KPI", "LLM", "OK", "PDF", "PM", "PR", "QA", "SEO", "SQL", "UI",
+  "UK", "URL", "URLS", "US", "USA", "UX", "XML", "YAML",
+]);
+
+function mostlyUppercase(line: string): boolean {
+  const letters = line.replace(/[^A-Za-z]/g, "");
+  if (letters.length === 0) return false;
+  const upper = letters.replace(/[^A-Z]/g, "").length;
+  return upper / letters.length > 0.6;
+}
+
+/** The sentence around `offset` on this line. */
+function sentenceAt(line: string, offset: number): string {
+  const before = line.slice(0, offset);
+  const start = Math.max(before.lastIndexOf(". "), before.lastIndexOf("! "), before.lastIndexOf("? "));
+  const after = line.slice(offset);
+  const endMatch = /[.!?](?:\s|$)/.exec(after);
+  return line.slice(start < 0 ? 0 : start + 2, endMatch ? offset + endMatch.index : line.length);
+}
+
+function hasOtherCapitals(sentence: string): boolean {
+  for (const m of sentence.matchAll(CAPS_WORD_RE)) {
+    const word = m[0].replace(/\u2019/g, "'");
+    if (!DIRECTIVE_WORDS.has(word) && !ACRONYMS.has(word) && !LABEL_WORDS.has(word)) return true;
+  }
+  return false;
+}
+
+// Words after which a capitalized word is a value, not a directive:
+// "say NEVER", "the keyword ALWAYS", "reply with MUST", "set it to NEVER"
+const LITERAL_BEFORE_RE = new RegExp(
+  "(?:\\b(?:words?|terms?|keywords?|commands?|values?|options?|flags?|labels?|tags?|fields?|" +
+    "status|state|mode|level|priority|code|token|string|literal|placeholder|setting|policy|" +
+    "say|says|saying|type|types|typing|writes?|prints?|outputs?|reply|replies|respond|responds|" +
+    "answer|answers|label(?:ed|led)|mark(?:ed)?|tag(?:ged)?|named|called|titled|" +
+    "to|as|is|are|was|were|be|equals?|of|or|and|from|than|with)|=)\\s*:?\\s*$",
+  "i",
+);
+
+/** A directive is followed by the (lowercase) action it governs. */
+const ACTION_AFTER_RE = /^\s*(?:\*\*|__)?\s*[a-z]/;
+
+/** Whether `offset` sits inside a quoted string on this line. */
+function insideQuotes(line: string, offset: number, length: number): boolean {
+  const before = line.slice(0, offset);
+  const after = line.slice(offset + length);
+  if (/["'`\u201C\u2018]\s*$/.test(before) || /^\s*["'`\u201D\u2019]/.test(after)) return true;
+  const straight = (before.match(/"/g) ?? []).length;
+  const curlyOpen = (before.match(/\u201C/g) ?? []).length;
+  const curlyClose = (before.match(/\u201D/g) ?? []).length;
+  return straight % 2 === 1 || curlyOpen > curlyClose;
+}
+
+const normalizeEmphasisRule: TranslationRule = {
+  name: "normalize_emphasis",
   apply(text) {
-    let result = text;
+    if (/\bRFC\s*2119\b|\bBCP\s*14\b|\bRFC\s*8174\b/i.test(text)) return null;
     let changed = false;
+    const lines = text.split("\n").map((line) => {
+      // Judge the line without the directive words themselves
+      if (mostlyUppercase(line.replace(EMPHASIS_RE, " "))) return line;
+      return line.replace(EMPHASIS_RE, (word: string, offset: number) => {
+        const before = line.slice(0, offset);
+        const after = line.slice(offset + word.length);
+        if (!ACTION_AFTER_RE.test(after)) return word;
+        if (LITERAL_BEFORE_RE.test(before)) return word;
+        if (insideQuotes(line, offset, word.length)) return word;
+        if (hasOtherCapitals(sentenceAt(line, offset))) return word;
+        const lower = word.toLowerCase();
+        const next = startsSentence(line, offset) ? capitalize(lower) : lower;
+        if (next !== word) changed = true;
+        return next;
+      });
+    });
+    return changed ? lines.join("\n") : null;
+  },
+};
 
-    // "Act as a senior engineer" → "Help as a senior engineer would"
-    result = result.replace(
-      /\bAct\s+as\s+(an?\s+)?/gi,
-      (_, article?: string) => {
-        changed = true;
-        return `Help as ${article ?? "a "}`;
-      },
+/**
+ * Rule 2: Use Claude's names for ChatGPT tools, keeping the grammar.
+ * Only unambiguous product names are renamed.
+ */
+function replaceTerm(
+  text: string,
+  re: RegExp,
+  replacement: string,
+  onChange: () => void,
+): string {
+  return text.replace(re, (...args: unknown[]) => {
+    const offset = args[args.length - 2] as number;
+    onChange();
+    return startsSentence(text, offset) ? capitalize(replacement) : replacement;
+  });
+}
+
+const toolNamesRule: TranslationRule = {
+  name: "claude_tool_names",
+  apply(text) {
+    let changed = false;
+    const mark = (): void => {
+      changed = true;
+    };
+    let result = text;
+    // ChatGPT's product names, written as names (capitalized). Lowercase
+    // "a code interpreter" could be something the user is building.
+    result = replaceTerm(result, /\b(?:[Tt]he\s+)?Code Interpreter(?:\s+tool)?\b/g, "code execution", mark);
+    result = replaceTerm(result, /\b(?:[Tt]he\s+)?Advanced Data Analysis(?:\s+tool)?\b/g, "code execution", mark);
+    // Only canvas that is clearly ChatGPT's
+    result = replaceTerm(
+      result,
+      /\b(?:(?:[Tt]he|[Aa])\s+)?ChatGPT(?:['\u2019]s)?\s+[Cc]anvas\b/g,
+      "an artifact",
+      mark,
     );
-
-    // "You are a senior engineer" → "You have expertise as a senior engineer"
-    // But only at sentence start or after period/newline
-    result = result.replace(
-      /(?:^|(?<=\.\s)|(?<=\n))You\s+are\s+(an?\s+)?(?!allowed|able|expected|free|welcome|encouraged)/gim,
-      (_, article?: string) => {
-        changed = true;
-        return `You have expertise as ${article ?? "a "}`;
-      },
-    );
-
     return changed ? result : null;
   },
 };
 
 /**
- * Rule 2: Soften absolute directives.
- * "You MUST always" → "Please always"
- * "NEVER" → "Avoid"
- * "You MUST NOT" → "Please avoid"
+ * Rule 3: For clearly code-focused instructions, mention artifacts.
  */
-const softenDirectivesRule: TranslationRule = {
-  name: "soften_directives",
-  apply(text) {
-    let result = text;
-    let changed = false;
+const CODE_INDICATORS = [
+  /\bcode\b/i,
+  /\bprogramm(?:ing|er)s?\b/i,
+  /\bfunctions?\b/i,
+  /\bscripts?\b/i,
+  /\bsnippets?\b/i,
+  /\bimplementations?\b/i,
+  /\brefactor\w*/i,
+  /\bdebug\w*/i,
+  /\b(?:typescript|javascript|python|java|golang|rust|sql|react)\b/i,
+];
 
-    // "You MUST always" / "You must always" → "Please always"
-    result = result.replace(/\bYou\s+MUST\s+always\b/g, () => {
-      changed = true;
-      return "Please always";
-    });
-    result = result.replace(/\bYou\s+must\s+always\b/g, () => {
-      changed = true;
-      return "Please always";
-    });
-
-    // "You MUST NOT" / "You must not" → "Please avoid"
-    result = result.replace(/\bYou\s+MUST\s+NOT\b/g, () => {
-      changed = true;
-      return "Please avoid";
-    });
-    result = result.replace(/\bYou\s+must\s+not\b/g, () => {
-      changed = true;
-      return "Please avoid";
-    });
-
-    // "You MUST" (without always/not) → "Please"
-    result = result.replace(/\bYou\s+MUST\b/g, () => {
-      changed = true;
-      return "Please";
-    });
-    result = result.replace(/\bYou\s+must\b/g, () => {
-      changed = true;
-      return "Please";
-    });
-
-    // "NEVER do X" → "Avoid doing X" — but only standalone NEVER at word boundary
-    result = result.replace(/\bNEVER\b/g, () => {
-      changed = true;
-      return "Avoid";
-    });
-
-    // "ALWAYS" → "Prefer to always"
-    result = result.replace(/\bALWAYS\b/g, () => {
-      changed = true;
-      return "Prefer to always";
-    });
-
-    return changed ? result : null;
-  },
-};
-
-/**
- * Rule 3: Code Interpreter → Artifacts.
- */
-const codeInterpreterRule: TranslationRule = {
-  name: "code_interpreter_to_artifacts",
-  apply(text) {
-    let result = text;
-    let changed = false;
-
-    result = result.replace(/\bCode\s+Interpreter\b/gi, () => {
-      changed = true;
-      return "Artifacts for code";
-    });
-
-    result = result.replace(
-      /\b[Uu]se\s+(?:the\s+)?python\s+(?:environment|sandbox|tool)\b/gi,
-      () => {
-        changed = true;
-        return "Use Artifacts for code execution";
-      },
-    );
-
-    return changed ? result : null;
-  },
-};
-
-/**
- * Rule 4: DALL-E / image generation → warning flag.
- */
-const dalleRule: TranslationRule = {
-  name: "dalle_unavailable_warning",
-  apply(text) {
-    let result = text;
-    let changed = false;
-
-    result = result.replace(
-      /\b[Uu]se\s+(?:the\s+)?DALL-?E\s+(?:to\s+)?/gi,
-      () => {
-        changed = true;
-        return "[Note: Image generation is not available on Claude] ";
-      },
-    );
-
-    result = result.replace(
-      /\b[Gg]enerate\s+(?:an?\s+)?image(?:s)?\s+(?:using|with|via)\s+DALL-?E\b/gi,
-      () => {
-        changed = true;
-        return "[Note: Image generation via DALL-E is not available on Claude]";
-      },
-    );
-
-    return changed ? result : null;
-  },
-};
-
-/**
- * Rule 5: "Browse the web" → "Use web search".
- */
-const browsingRule: TranslationRule = {
-  name: "browsing_to_web_search",
-  apply(text) {
-    let result = text;
-    let changed = false;
-
-    result = result.replace(/\b[Bb]rowse\s+the\s+web\b/g, () => {
-      changed = true;
-      return "Use web search";
-    });
-
-    result = result.replace(/\b[Bb]rowse\s+the\s+internet\b/g, () => {
-      changed = true;
-      return "Use web search";
-    });
-
-    result = result.replace(/\b[Ww]eb\s+browsing\b/g, () => {
-      changed = true;
-      return "web search";
-    });
-
-    return changed ? result : null;
-  },
-};
-
-/**
- * Rule 6: Canvas → Artifacts.
- */
-const canvasRule: TranslationRule = {
-  name: "canvas_to_artifacts",
-  apply(text) {
-    let result = text;
-    let changed = false;
-
-    result = result.replace(/\b[Uu]se\s+[Cc]anvas\b/g, () => {
-      changed = true;
-      return "Use Artifacts";
-    });
-
-    result = result.replace(/\b[Cc]anvas\s+mode\b/g, () => {
-      changed = true;
-      return "Artifacts";
-    });
-
-    result = result.replace(/\bin\s+[Cc]anvas\b/g, () => {
-      changed = true;
-      return "in Artifacts";
-    });
-
-    return changed ? result : null;
-  },
-};
-
-/**
- * Rule 7: Wrap structured sections in XML tags.
- * Detects sections like "## Guidelines:" or "Rules:" and wraps them.
- */
-const xmlTagsRule: TranslationRule = {
-  name: "wrap_xml_tags",
-  apply(text) {
-    // Only apply if text has clear sections (headings or labeled blocks)
-    const hasSections =
-      /^#{1,3}\s+\w+/m.test(text) ||
-      /^[A-Z][a-zA-Z\s]+:\s*\n/m.test(text);
-    if (!hasSections) return null;
-
-    let result = text;
-
-    // Wrap markdown heading sections: "## Rules\n..." → "<rules>\n...\n</rules>"
-    result = result.replace(
-      /^(#{1,3})\s+([A-Za-z\s]+?)\s*\n([\s\S]*?)(?=^#{1,3}\s|\z)/gm,
-      (_match, _hashes: string, title: string, body: string) => {
-        const tag = title.trim().toLowerCase().replace(/\s+/g, "-");
-        return `<${tag}>\n${body.trimEnd()}\n</${tag}>\n`;
-      },
-    );
-
-    return result !== text ? result : null;
-  },
-};
-
-/**
- * Rule 8: Add Artifacts hint for code-heavy workspaces.
- */
 const artifactsHintRule: TranslationRule = {
   name: "add_artifacts_hint",
   apply(text) {
-    const codeIndicators = [
-      /\bcode\b/i,
-      /\bprogram/i,
-      /\bfunction/i,
-      /\bscript/i,
-      /\bsnippet/i,
-      /\bimplementation/i,
-    ];
-    const codeCount = codeIndicators.filter((p) => p.test(text)).length;
-
-    // Only add hint if text is code-heavy (3+ code indicators)
-    if (codeCount < 3) return null;
-
-    const hint =
-      "\n\nWhen producing code, use Artifacts to present complete, runnable code blocks.";
-
-    // Don't add if already mentioned
-    if (text.includes("Artifacts")) return null;
-
-    return text + hint;
+    const hits = CODE_INDICATORS.filter((p) => p.test(text)).length;
+    if (hits < 4 || /\bartifacts?\b/i.test(text)) return null;
+    return `${text.trimEnd()}\n\nWhen you write complete programs or long code, put them in an artifact so they're easy to copy and run.`;
   },
 };
 
 // ─── Rule Registry ───────────────────────────────────────────
 
 const ALL_RULES: TranslationRule[] = [
-  rolePlayRule,
-  softenDirectivesRule,
-  codeInterpreterRule,
-  dalleRule,
-  browsingRule,
-  canvasRule,
-  xmlTagsRule,
+  normalizeEmphasisRule,
+  toolNamesRule,
   artifactsHintRule,
 ];
 
@@ -349,22 +331,26 @@ export function translateForClaude(instructions: string): TranslationResult {
     return { translated: "", rulesApplied: [] };
   }
 
-  let current = instructions;
+  const { masked, restore } = maskCode(instructions);
+  let current = masked;
   const rulesApplied: string[] = [];
 
   for (const rule of ALL_RULES) {
     const result = rule.apply(current);
-    if (result !== null) {
+    if (result !== null && result !== current) {
       current = result;
       rulesApplied.push(rule.name);
     }
   }
 
-  return { translated: current, rulesApplied };
+  const translated = restore(current);
+  return translated === instructions
+    ? { translated: instructions, rulesApplied: [] }
+    : { translated, rulesApplied };
 }
 
 /**
- * Generate warnings for capabilities that don't translate cleanly to Claude.
+ * Warnings for capabilities that don't carry over to Claude as they are.
  */
 export function generateCapabilityWarnings(
   capabilities: DetectedCapabilities,
@@ -372,16 +358,18 @@ export function generateCapabilityWarnings(
   const warnings: string[] = [];
 
   if (capabilities.usesDallE) {
-    warnings.push("Image generation (DALL-E) is not available on Claude");
+    warnings.push(
+      "These instructions mention image generation (DALL\u00B7E). Check how the new assistant should handle those requests.",
+    );
   }
   if (capabilities.usesApiActions) {
     warnings.push(
-      "API Actions are not available on Claude — consider MCP integrations",
+      "These instructions use GPT Actions (API calls). Claude reaches other services through connectors (MCP) instead, so set those up separately.",
     );
   }
   if (capabilities.usesCanvas) {
     warnings.push(
-      "Canvas has been mapped to Artifacts — behavior may differ",
+      "ChatGPT's canvas is called an artifact in Claude, and the two work a little differently.",
     );
   }
 

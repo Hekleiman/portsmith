@@ -15,6 +15,8 @@ export interface GemImportResult {
   gemId?: string;
   /** Human-readable error message on failure. */
   error?: string;
+  /** Gemini answered, but PortSmith couldn't tell whether the Gem exists. */
+  maybeCreated?: boolean;
   /** Manual fallback when the API call fails. */
   fallback?: GemImportFallback;
 }

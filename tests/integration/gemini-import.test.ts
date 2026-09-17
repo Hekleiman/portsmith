@@ -161,7 +161,8 @@ describe("createGem", () => {
     const result = await createGem(sampleConfig);
 
     expect(result.success).toBe(false);
-    expect(result.error).toContain("did not contain a Gem ID");
+    expect(result.error).toContain("didn't include a Gem ID");
+    expect(result.maybeCreated).toBe(true);
     expect(result.fallback).toBeDefined();
   });
 

@@ -1,3 +1,4 @@
+import { APP_VERSION, MANIFEST_VERSION } from "@/shared/constants";
 import { describe, it, expect } from "vitest";
 import {
   generateManifest,
@@ -83,8 +84,8 @@ describe("generateManifest", () => {
   it("sets correct source platform and metadata", () => {
     const manifest = generateManifest(makeRawData());
     expect(manifest.source.platform).toBe("chatgpt");
-    expect(manifest.version).toBe("0.1.0");
-    expect(manifest.metadata.generatedBy).toBe("portsmith/0.1.0");
+    expect(manifest.version).toBe(MANIFEST_VERSION);
+    expect(manifest.metadata.generatedBy).toBe(`portsmith/${APP_VERSION}`);
   });
 
   it("sets exportMethod to official_export when no DOM data", () => {
@@ -125,9 +126,12 @@ describe("generateManifest", () => {
     });
 
     const ws = manifest.workspaces[0]!;
-    expect(ws.instructions.translated).toBeDefined();
-    expect(ws.instructions.translated!.claude).toContain("Help as");
-    expect(ws.instructions.translated!.claude).toContain("Please always");
+    expect(ws.instructions.raw).toBe(
+      "Act as a senior code reviewer. You MUST always provide line numbers.",
+    );
+    expect(ws.instructions.translated?.claude).toBe(
+      "Act as a senior code reviewer. You must always provide line numbers.",
+    );
   });
 
   it("does not add translated field when no rules applied", () => {
@@ -244,7 +248,7 @@ describe("generateManifest", () => {
       customGPTs: [gpt],
     });
     const warnings = manifest.workspaces[0]!.migration.warnings;
-    expect(warnings.some((w) => w.includes("DALL-E"))).toBe(true);
+    expect(warnings.some((w) => w.includes("image generation"))).toBe(true);
   });
 
   it("adds manual steps for knowledge files and conversation starters", () => {
@@ -335,15 +339,16 @@ describe("confidence scoring", () => {
 // ─── Global instructions ────────────────────────────────────
 
 describe("global instructions", () => {
-  it("translates custom instructions and includes in manifest", () => {
+  it("keeps custom instructions verbatim and labels both fields", () => {
     const manifest = generateManifest(makeRawData(), {
       customInstructions: {
         aboutUser: "I am a developer.",
         responsePreferences: "You MUST always use TypeScript.",
       },
     });
-    expect(manifest.globalInstructions).toContain("developer");
-    expect(manifest.globalInstructions).toContain("Please always use TypeScript");
+    expect(manifest.globalInstructions).toBe(
+      "About me:\nI am a developer.\n\nHow I'd like responses:\nYou MUST always use TypeScript.",
+    );
   });
 
   it("handles missing custom instructions", () => {
@@ -447,10 +452,15 @@ describe("mapMemoryItems", () => {
     expect(items[0]!.migration.truncatedVersion).toBeUndefined();
   });
 
-  it("limits to 30 items", () => {
+  it("keeps every item (memory is imported as one block)", () => {
     const raw = Array.from({ length: 50 }, (_, i) => `Fact number ${i}`);
     const items = mapMemoryItems(raw);
-    expect(items.length).toBeLessThanOrEqual(30);
+    expect(items).toHaveLength(50);
+  });
+
+  it("drops exact duplicates", () => {
+    const items = mapMemoryItems(["Likes tea", "likes  tea", "Likes coffee"]);
+    expect(items.map((i) => i.fact)).toEqual(["Likes tea", "Likes coffee"]);
   });
 
   it("skips empty strings", () => {
@@ -527,11 +537,9 @@ describe("full integration", () => {
     expect(ws.sampleTopics).toContain("PR Review: Auth Module");
 
     // Instructions translated
-    expect(ws.instructions.translated).toBeDefined();
-    expect(ws.instructions.translated!.claude).toContain("Help as");
-    expect(ws.instructions.translated!.claude).toContain("Please always");
-    expect(ws.instructions.translated!.claude).toContain("Artifacts for code");
-    expect(ws.instructions.translated!.claude).toContain("Avoid approve");
+    expect(ws.instructions.translated?.claude).toBe(
+      "Act as a senior code reviewer. You must always provide line-by-line feedback. Use code execution to verify fixes. Never approve without checking tests.",
+    );
 
     // Knowledge files mapped
     expect(ws.knowledgeFiles).toHaveLength(2);
@@ -668,9 +676,18 @@ describe("ChatGPT Project workspace mapping", () => {
       projects: [project],
     });
     const ws = manifest.workspaces[0]!;
-    expect(ws.instructions.translated).toBeDefined();
-    expect(ws.instructions.translated!.claude).toContain("Help as");
-    expect(ws.instructions.translated!.claude).toContain("Please always");
+    expect(ws.instructions.translated?.claude).toBe(
+      "Act as a senior developer. You must always use TypeScript.",
+    );
+  });
+
+  it("flags a project whose settings couldn't be read", () => {
+    const project = { ...makeProject({ instructions: "" }), incomplete: true };
+    const manifest = generateManifest(makeRawData(), { projects: [project] });
+    const ws = manifest.workspaces[0]!;
+    expect(ws.migration.warnings[0]).toContain("couldn't read this project's instructions");
+    expect(ws.migration.confidence).toBeLessThan(0.5);
+    expect(ws.migration.manualStepsRequired[0]).toContain("by hand");
   });
 
   it("sets exportMethod to dom_extraction when projects provided", () => {

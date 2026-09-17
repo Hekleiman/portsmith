@@ -1,4 +1,5 @@
 import StepProgress from "./StepProgress";
+import ConfirmButton from "./ConfirmButton";
 import { canProceed, useMigrationStore } from "../store/migration-store";
 
 export interface WizardLayoutProps {
@@ -33,14 +34,21 @@ export default function WizardLayout({
     <div className="flex h-screen w-full flex-col bg-white">
       {/* Header */}
       <header className="border-b border-gray-200 px-4 py-3">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-2">
           <h1 className="text-lg font-bold text-gray-900">PortSmith</h1>
-          <button
-            onClick={reset}
-            className="text-xs text-gray-400 hover:text-gray-600"
-          >
-            Cancel
-          </button>
+          {!isFirstPhase && (
+            <ConfirmButton
+              label="Start over"
+              question={
+                isMigrating
+                  ? "Stop the migration and start over?"
+                  : "Discard this migration and start over?"
+              }
+              confirmLabel="Start over"
+              onConfirm={reset}
+              className="text-xs text-gray-600 hover:text-gray-900"
+            />
+          )}
         </div>
       </header>
 
@@ -52,7 +60,7 @@ export default function WizardLayout({
       {/* Content */}
       <main className="flex-1 overflow-y-auto p-4">{children}</main>
 
-      {/* Footer navigation — hidden during editing and migrating (they have own controls) */}
+      {/* Footer navigation: hidden during editing and migrating (they have their own controls) */}
       {!isLastStep && !isEditing && !isMigrating && (
         <footer className="border-t border-gray-200 px-4 py-3">
           <div className="flex justify-between">
@@ -61,7 +69,7 @@ export default function WizardLayout({
               disabled={!showBack}
               className={`rounded-lg px-4 py-2 text-sm font-medium ${
                 showBack
-                  ? "text-gray-600 hover:bg-gray-100"
+                  ? "text-gray-700 hover:bg-gray-100"
                   : "invisible"
               }`}
             >
@@ -72,7 +80,7 @@ export default function WizardLayout({
               disabled={!canGo}
               className={`rounded-lg px-6 py-2 text-sm font-medium text-white ${
                 canGo
-                  ? "bg-blue-600 hover:bg-blue-700"
+                  ? "bg-blue-700 hover:bg-blue-800"
                   : "cursor-not-allowed bg-blue-300"
               }`}
             >

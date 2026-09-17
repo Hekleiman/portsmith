@@ -7,14 +7,27 @@ import type {
   Workspace,
   MemoryItem,
 } from "@/core/schema/types";
+import {
+  getInstructionsForTarget,
+  platformLabel,
+  withInstructionsForTarget,
+} from "@/core/platforms";
+import {
+  buildManualProjectMemory,
+  projectMemoryToEditableText,
+} from "@/core/transform/project-memory";
 import InstructionDiff from "../components/InstructionDiff";
 import FileList from "../components/FileList";
 import CapabilityMap from "../components/CapabilityMap";
+import ProjectMemoryEditor from "../components/ProjectMemoryEditor";
+import ConfirmButton from "../components/ConfirmButton";
 
 export default function WorkspaceEditor(): React.JSX.Element {
   const manifestId = useMigrationStore((s) => s.manifestId);
   const editingWorkspaceId = useMigrationStore((s) => s.editingWorkspaceId);
+  const targetPlatform = useMigrationStore((s) => s.targetPlatform);
   const prevStep = useMigrationStore((s) => s.prevStep);
+  const target = targetPlatform ?? "claude";
 
   const [manifest, setManifest] = useState<PortsmithManifest | null>(null);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
@@ -24,16 +37,17 @@ export default function WorkspaceEditor(): React.JSX.Element {
 
   // Editable state
   const [translatedInstructions, setTranslatedInstructions] = useState("");
+  const [memoryText, setMemoryText] = useState("");
   const [excludedFileIds, setExcludedFileIds] = useState<Set<string>>(
     new Set(),
   );
-  const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
-  // Track initial translated value to detect changes
+  // Initial values to detect changes
   const initialTranslatedRef = useRef("");
+  const initialMemoryRef = useRef("");
 
   // ─── Load workspace from manifest ─────────────────────────
 
@@ -66,10 +80,13 @@ export default function WorkspaceEditor(): React.JSX.Element {
         setManifest(record.data);
         setWorkspace(ws);
 
-        const translated =
-          ws.instructions.translated?.["claude"] ?? ws.instructions.raw;
+        const translated = getInstructionsForTarget(ws, target);
         setTranslatedInstructions(translated);
         initialTranslatedRef.current = translated;
+
+        const memory = projectMemoryToEditableText(ws.projectMemory);
+        setMemoryText(memory);
+        initialMemoryRef.current = memory;
 
         // Filter memory items related to this workspace
         setRelatedMemory(
@@ -89,21 +106,22 @@ export default function WorkspaceEditor(): React.JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [manifestId, editingWorkspaceId]);
+  }, [manifestId, editingWorkspaceId, target]);
 
-  // ─── Track dirty state ──────────────────────────────────────
-
-  useEffect(() => {
-    const instructionsChanged =
-      translatedInstructions !== initialTranslatedRef.current;
-    const filesChanged = excludedFileIds.size > 0;
-    setDirty(instructionsChanged || filesChanged);
-  }, [translatedInstructions, excludedFileIds]);
+  const dirty =
+    translatedInstructions !== initialTranslatedRef.current ||
+    memoryText !== initialMemoryRef.current ||
+    excludedFileIds.size > 0;
 
   // ─── Handlers ──────────────────────────────────────────────
 
   const handleTranslatedChange = useCallback((value: string) => {
     setTranslatedInstructions(value);
+    setSaveSuccess(false);
+  }, []);
+
+  const handleMemoryChange = useCallback((value: string) => {
+    setMemoryText(value);
     setSaveSuccess(false);
   }, []);
 
@@ -120,44 +138,44 @@ export default function WorkspaceEditor(): React.JSX.Element {
     setSaveSuccess(false);
   }, []);
 
-  const handleBack = useCallback(() => {
-    if (dirty) {
-      const confirmed = window.confirm(
-        "You have unsaved changes. Discard and go back?",
-      );
-      if (!confirmed) return;
-    }
-    prevStep();
-  }, [dirty, prevStep]);
-
   const handleSave = useCallback(async () => {
     if (!manifest || !workspace || !manifestId) return;
 
     setSaving(true);
     setSaveError(null);
 
-    // Build updated workspace
-    const updatedWorkspace: Workspace = {
-      ...workspace,
-      instructions: {
-        ...workspace.instructions,
-        translated: {
-          ...workspace.instructions.translated,
-          claude: translatedInstructions,
-        },
-      },
+    let updated: Workspace = withInstructionsForTarget(
+      workspace,
+      target,
+      translatedInstructions,
+    );
+    updated = {
+      ...updated,
       knowledgeFiles: workspace.knowledgeFiles.filter(
         (f) => !excludedFileIds.has(f.id),
       ),
     };
 
+    if (memoryText !== initialMemoryRef.current) {
+      const edited = buildManualProjectMemory(memoryText);
+      if (edited && workspace.projectMemory && memoryText.trim()) {
+        // Keep the original source label when the user only trimmed notes
+        edited.source =
+          workspace.projectMemory.source === "manual"
+            ? "manual"
+            : workspace.projectMemory.source;
+      }
+      updated = { ...updated, projectMemory: edited ?? undefined };
+      if (!edited) delete updated.projectMemory;
+    }
+
     // Validate against Zod schema
-    const result = safeParseWorkspace(updatedWorkspace);
+    const result = safeParseWorkspace(updated);
     if (!result.success) {
       const issues = result.error.issues
         .map((i) => `${i.path.join(".")}: ${i.message}`)
         .join("; ");
-      setSaveError(`Validation failed: ${issues}`);
+      setSaveError(`Couldn't save: ${issues}`);
       setSaving(false);
       return;
     }
@@ -175,39 +193,40 @@ export default function WorkspaceEditor(): React.JSX.Element {
       setManifest(updatedManifest);
       setWorkspace(result.data);
       initialTranslatedRef.current = translatedInstructions;
+      initialMemoryRef.current = memoryText;
       setExcludedFileIds(new Set());
-      setDirty(false);
       setSaveSuccess(true);
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : String(err));
     } finally {
       setSaving(false);
     }
-  }, [manifest, workspace, manifestId, translatedInstructions, excludedFileIds]);
+  }, [manifest, workspace, manifestId, translatedInstructions, memoryText, excludedFileIds, target]);
 
   // ─── Loading ─────────────────────────────────────────────
 
   if (loading) {
     return (
       <div className="flex flex-1 items-center justify-center">
-        <p className="text-sm text-gray-400">Loading workspace...</p>
+        <p className="text-sm text-gray-600" role="status">Loading workspace...</p>
       </div>
     );
   }
 
   // ─── Error ───────────────────────────────────────────────
 
-  if (error || !workspace) {
+  if (error || !workspace || !manifest) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center text-center">
         <div className="rounded-lg border border-red-200 bg-red-50 p-4">
-          <p className="text-sm text-red-700">
+          <p className="text-sm text-red-800">
             {error ?? "Workspace not found."}
           </p>
         </div>
         <button
+          type="button"
           onClick={prevStep}
-          className="mt-4 text-sm font-medium text-blue-600 hover:text-blue-700"
+          className="mt-4 text-sm font-medium text-blue-800 hover:text-blue-900"
         >
           Back to Review
         </button>
@@ -215,38 +234,49 @@ export default function WorkspaceEditor(): React.JSX.Element {
     );
   }
 
+  const sourcePlatform = manifest.source.platform;
+  const sourceLabel = platformLabel(sourcePlatform);
+  const targetLabel = platformLabel(target);
+
+  const backIcon = (
+    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+    </svg>
+  );
+
   // ─── Render ──────────────────────────────────────────────
 
   return (
     <div className="flex flex-1 flex-col">
       {/* Header with back + save */}
-      <div className="flex items-center justify-between">
-        <button
-          onClick={handleBack}
-          className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700"
-        >
-          <svg
-            className="h-4 w-4"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
+      <div className="flex items-center justify-between gap-2">
+        {dirty ? (
+          <ConfirmButton
+            label="← Review"
+            question="Discard unsaved changes?"
+            confirmLabel="Discard"
+            cancelLabel="Keep editing"
+            onConfirm={prevStep}
+            className="flex items-center gap-1 text-sm text-gray-700 hover:text-gray-900"
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={prevStep}
+            className="flex items-center gap-1 text-sm text-gray-700 hover:text-gray-900"
           >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M15 19l-7-7 7-7"
-            />
-          </svg>
-          Review
-        </button>
+            {backIcon}
+            Review
+          </button>
+        )}
         <button
+          type="button"
           onClick={() => void handleSave()}
           disabled={saving || !dirty}
           className={`rounded-lg px-4 py-1.5 text-sm font-medium ${
             dirty && !saving
-              ? "bg-blue-600 text-white hover:bg-blue-700"
-              : "cursor-not-allowed bg-gray-200 text-gray-400"
+              ? "bg-blue-700 text-white hover:bg-blue-800"
+              : "cursor-not-allowed bg-gray-200 text-gray-500"
           }`}
         >
           {saving ? "Saving..." : "Save"}
@@ -258,37 +288,56 @@ export default function WorkspaceEditor(): React.JSX.Element {
         {workspace.name}
       </h2>
       {workspace.description && (
-        <p className="mt-0.5 text-sm text-gray-500">{workspace.description}</p>
+        <p className="mt-0.5 text-sm text-gray-600">{workspace.description}</p>
       )}
 
       {/* Save feedback */}
       {saveError && (
-        <div className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2">
-          <p className="text-xs text-red-700">{saveError}</p>
+        <div className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2" role="alert">
+          <p className="text-xs text-red-800">{saveError}</p>
         </div>
       )}
       {saveSuccess && (
-        <div className="mt-2 rounded-lg border border-green-200 bg-green-50 px-3 py-2">
-          <p className="text-xs text-green-700">Changes saved.</p>
+        <div className="mt-2 rounded-lg border border-green-200 bg-green-50 px-3 py-2" role="status">
+          <p className="text-xs text-green-800">Changes saved.</p>
         </div>
       )}
 
       {/* Instructions */}
       <section className="mt-4">
-        <h3 className="text-sm font-medium text-gray-700">Instructions</h3>
+        <h3 className="text-sm font-medium text-gray-800">Instructions</h3>
         <div className="mt-2">
           <InstructionDiff
             original={workspace.instructions.raw}
             translated={translatedInstructions}
             onTranslatedChange={handleTranslatedChange}
+            sourceLabel={sourceLabel}
+            targetLabel={targetLabel}
+          />
+        </div>
+      </section>
+
+      {/* Project memory */}
+      <section className="mt-4">
+        <h3 className="text-sm font-medium text-gray-800">Project memory</h3>
+        <div className="mt-2">
+          <ProjectMemoryEditor
+            workspaceName={workspace.name}
+            sourcePlatform={sourcePlatform}
+            sourceLabel={sourceLabel}
+            targetLabel={targetLabel}
+            original={workspace.projectMemory}
+            value={memoryText}
+            onChange={handleMemoryChange}
+            sourceUrl={sourcePlatform === "chatgpt" ? "https://chatgpt.com/" : undefined}
           />
         </div>
       </section>
 
       {/* Knowledge Files */}
       <section className="mt-4">
-        <h3 className="text-sm font-medium text-gray-700">
-          Knowledge Files ({workspace.knowledgeFiles.length})
+        <h3 className="text-sm font-medium text-gray-800">
+          Knowledge files ({workspace.knowledgeFiles.length})
         </h3>
         <div className="mt-2">
           <FileList
@@ -302,7 +351,7 @@ export default function WorkspaceEditor(): React.JSX.Element {
       {/* Capabilities */}
       {workspace.capabilities.length > 0 && (
         <section className="mt-4">
-          <h3 className="text-sm font-medium text-gray-700">
+          <h3 className="text-sm font-medium text-gray-800">
             Capabilities ({workspace.capabilities.length})
           </h3>
           <div className="mt-2">
@@ -314,8 +363,8 @@ export default function WorkspaceEditor(): React.JSX.Element {
       {/* Related memory */}
       {relatedMemory.length > 0 && (
         <section className="mt-4">
-          <h3 className="text-sm font-medium text-gray-700">
-            Related Memory ({relatedMemory.length})
+          <h3 className="text-sm font-medium text-gray-800">
+            Related memory ({relatedMemory.length})
           </h3>
           <div className="mt-2 space-y-1.5">
             {relatedMemory.map((item) => (
@@ -323,8 +372,8 @@ export default function WorkspaceEditor(): React.JSX.Element {
                 key={item.id}
                 className="rounded-lg border border-gray-200 px-3 py-2"
               >
-                <p className="text-sm text-gray-700">{item.fact}</p>
-                <span className="mt-1 inline-block rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-500">
+                <p className="text-sm text-gray-800">{item.fact}</p>
+                <span className="mt-1 inline-block rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-700">
                   {item.category}
                 </span>
               </div>
@@ -336,13 +385,13 @@ export default function WorkspaceEditor(): React.JSX.Element {
       {/* Manual steps */}
       {workspace.migration.manualStepsRequired.length > 0 && (
         <section className="mt-4">
-          <h3 className="text-sm font-medium text-gray-700">
-            Manual Steps Required
+          <h3 className="text-sm font-medium text-gray-800">
+            Manual steps required
           </h3>
           <ul className="mt-2 space-y-1">
             {workspace.migration.manualStepsRequired.map((step, i) => (
-              <li key={i} className="flex gap-2 text-sm text-gray-600">
-                <span className="shrink-0 text-gray-400">{i + 1}.</span>
+              <li key={i} className="flex gap-2 text-sm text-gray-700">
+                <span className="shrink-0 text-gray-600">{i + 1}.</span>
                 {step}
               </li>
             ))}

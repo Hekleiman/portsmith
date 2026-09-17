@@ -146,7 +146,7 @@ export default function GeminiExtract(): React.JSX.Element {
 
       // Step 2: Generate manifest
       markStep(1, "active");
-      const manifest = generateGeminiManifest(result.gems);
+      const manifest = generateGeminiManifest(result.gems, result.warnings);
 
       const manifestId = `manifest-${Date.now()}`;
       await saveManifest(manifestId, manifest);
@@ -225,7 +225,7 @@ export default function GeminiExtract(): React.JSX.Element {
               </svg>
               <span>
                 {tabLocation
-                  ? `Found Gemini ${tabLocation} — ready to go`
+                  ? `Found Gemini ${tabLocation}. Ready to go.`
                   : "Gemini is open and ready"}
               </span>
             </div>
@@ -253,7 +253,7 @@ export default function GeminiExtract(): React.JSX.Element {
                   onClick={() => void checkForGemini()}
                   className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-50"
                 >
-                  I already opened it — check again
+                  I already opened it, check again
                 </button>
               </div>
               <p className="mt-2 text-xs text-amber-600">
@@ -376,7 +376,7 @@ export default function GeminiExtract(): React.JSX.Element {
         Reading your Gemini Gems
       </h2>
       <p className="mt-1 text-sm text-gray-500">
-        Please keep this panel open — this will only take a moment.
+        Please keep this panel open. This will only take a moment.
       </p>
       <div className="mt-4">
         <ProgressTracker steps={steps} startedAt={startedAt} />

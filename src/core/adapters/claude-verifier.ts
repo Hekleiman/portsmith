@@ -1,4 +1,4 @@
-import { sendTabMessage } from "@/shared/messaging";
+import { safeSendTabMessage } from "@/shared/messaging";
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -30,12 +30,11 @@ async function findClaudeTab(): Promise<number | null> {
 // ─── Verification ───────────────────────────────────────────
 
 /**
- * Best-effort verification: checks claude.ai/projects page for
- * project names that match migrated workspaces.
+ * Check that projects with these names exist in the user's Claude account.
  *
- * Runs in the service worker context. Finds the active Claude tab,
- * navigates to /projects, then asks the content script to scan
- * the DOM for matching project names.
+ * Uses Claude's project list API through the content script. The previous
+ * version navigated the user's Claude tab to /projects and scanned the
+ * page, which pulled the user away from the project they had just opened.
  */
 export async function verifyProjects(
   projectNames: string[],
@@ -53,26 +52,15 @@ export async function verifyProjects(
     };
   }
 
-  // Navigate to projects page for scanning
   try {
-    await chrome.tabs.update(tabId, { url: "https://claude.ai/projects" });
-    await new Promise((resolve) => setTimeout(resolve, 3000));
+    return await safeSendTabMessage(tabId, "CLAUDE_FIND_PROJECTS", {
+      names: projectNames,
+    });
   } catch {
     return {
       found: [],
       notFound: projectNames,
-      error: "Could not navigate to Claude projects page.",
-    };
-  }
-
-  // Ask the content script to scan the DOM
-  try {
-    return await sendTabMessage(tabId, "VERIFY_PROJECTS", { projectNames });
-  } catch {
-    return {
-      found: [],
-      notFound: projectNames,
-      error: "Could not communicate with Claude page. Verification skipped.",
+      error: "Could not reach the Claude tab. Verification skipped.",
     };
   }
 }
