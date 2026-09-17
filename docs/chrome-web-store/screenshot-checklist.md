@@ -77,8 +77,8 @@ Setup for every shot:
 
 - **Listing URL:** https://hekleiman.github.io/portsmith/privacy-policy.html
 - **Source:** GitHub Pages, from `main:/docs`.
-- **Current status (checked 2026-09-17):** the live page still shows "Effective date: March 1, 2026". The 0.4.0 version ("Effective date: September 16, 2026 (version 0.4.0)") is on `release/v0.4.0` and goes live only after PR #1 is merged into `main`.
-- [ ] After the merge, reload the URL and confirm it shows "version 0.4.0" before submitting.
+- **Current status (checked 2026-09-17, after the v0.4.0 merge):** `main` is at `7427189` and now carries the 0.4.0 policy, "Effective date: September 17, 2026 (version 0.4.0)", with the Gemini and upload-service sections. The live page was byte-identical to the old `main:docs/privacy-policy.html`, which confirms Pages serves `main:/docs`, so the push publishes it with no separate deploy step.
+- [ ] After `main` is pushed, reload the URL and confirm it shows "version 0.4.0" and mentions Gemini before submitting.
 
 ## Fields to paste into the dashboard
 
@@ -87,7 +87,7 @@ Setup for every shot:
 | Short description | `store-listing.md`, "Short Description" (must match `description` in `manifest.json`) |
 | Detailed description | `store-listing.md`, "Full Description" |
 | What's new / release notes | `store-listing.md`, "What's New in v0.4.0" |
-| Single purpose | Not written yet. Suggested: "Move a user's AI assistant setup (projects, GPTs, Gems, instructions, files and memory) between ChatGPT, Claude and Gemini." |
+| Single purpose | "PortSmith moves a user's own AI assistant setup (projects, custom GPTs, Gems, instructions, knowledge files, project memory and saved memories) from one assistant to another. Every feature serves that one purpose: reading the setup from the source site the user is signed in to, letting the user review it, and recreating it on the target site." |
 | Permission justifications (`storage`, `sidePanel`, `scripting`) | `permission-justifications.md` |
 | Host permission justification (chatgpt.com, claude.ai, gemini.google.com) | `permission-justifications.md` |
 | Data usage disclosures | `privacy-policy.html` (no data collected or sent to PortSmith; everything stays in the browser) |
