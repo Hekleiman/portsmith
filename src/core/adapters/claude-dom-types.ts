@@ -49,10 +49,16 @@ export interface ExtractedClaudeProject {
 export interface ClaudeExtractionOptions {
   includeMemory: boolean;
   includeKnowledge: boolean;
+  /** Memory outside projects and the "Instructions for Claude" preferences */
+  includeGlobal: boolean;
 }
 
 export interface ClaudeExtractionResult {
   success: boolean;
   projects: ExtractedClaudeProject[];
   warnings: Array<{ context: string; message: string }>;
+  /** Memory notes that belong to no project (profile, people, topics...) */
+  globalMemory?: ExtractedClaudeMemoryEntry[];
+  /** "Instructions for Claude" from the account settings */
+  preferences?: string;
 }

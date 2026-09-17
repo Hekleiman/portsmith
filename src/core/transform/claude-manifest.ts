@@ -10,11 +10,13 @@ import type {
 } from "@/core/schema/types";
 import type {
   ClaudeExtractionResult,
+  ExtractedClaudeMemoryEntry,
   ExtractedClaudeProject,
 } from "@/core/adapters/claude-dom-types";
 import { MANIFEST_VERSION, GENERATED_BY } from "@/shared/constants";
 import { getMimeType } from "./file-compatibility";
 import { categorize } from "./categorize";
+import { mapMemoryItems } from "./memory-mapper";
 
 // ─── Knowledge ──────────────────────────────────────────────
 
@@ -125,13 +127,36 @@ export function buildWorkspaceFromProject(
   };
 }
 
+// ─── Global memory ──────────────────────────────────────────
+
+/** One memory fact from a note: its title, then its lines joined up. */
+export function memoryNoteToFact(note: ExtractedClaudeMemoryEntry): string {
+  const text = (note.body || note.summary)
+    .split("\n")
+    .map((line) => line.replace(/^\s*(?:[-*+]|#{1,6}|\d+\.)\s+/, "").trim())
+    .filter(Boolean)
+    .join(" ");
+  const title = note.title.trim();
+  if (!text) return title;
+  return title ? `${title}: ${text}` : text;
+}
+
 // ─── Public API ─────────────────────────────────────────────
+
+export interface ClaudeGlobalData {
+  /** Memory notes outside projects (never project memory) */
+  memory?: ExtractedClaudeMemoryEntry[];
+  /** "Instructions for Claude" */
+  preferences?: string;
+}
 
 export function generateClaudeManifest(
   projects: ExtractedClaudeProject[],
   extractionWarnings: ClaudeExtractionResult["warnings"] = [],
+  global: ClaudeGlobalData = {},
 ): PortsmithManifest {
   const now = new Date().toISOString();
+  const memory = mapMemoryItems((global.memory ?? []).map(memoryNoteToFact));
 
   const workspaces = projects.map((p) => buildWorkspaceFromProject(p, now));
 
@@ -153,8 +178,8 @@ export function generateClaudeManifest(
       interests: [],
     },
     workspaces,
-    memory: [],
-    globalInstructions: "",
+    memory,
+    globalInstructions: global.preferences?.trim() ?? "",
     metadata: {
       generatedBy: GENERATED_BY,
       ...(extractionWarnings.length > 0

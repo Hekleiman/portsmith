@@ -1,6 +1,7 @@
 // ─── Claude Extraction Page ─────────────────────────────────
-// Extracts Projects (instructions, knowledge docs and project memory) from
-// the user's Claude account via the internal API
+// Extracts Projects (instructions, knowledge docs and project memory), plus
+// the user's global memory and preferences, from their Claude account via
+// the internal API
 // (CLAUDE_EXTRACT_PROJECTS message to the content script).
 
 import { useState, useCallback, useEffect } from "react";
@@ -62,6 +63,7 @@ export default function ClaudeExtract(): React.JSX.Element {
   // What to include
   const [includeMemory, setIncludeMemory] = useState(true);
   const [includeKnowledge, setIncludeKnowledge] = useState(true);
+  const [includeGlobal, setIncludeGlobal] = useState(true);
   const [progressText, setProgressText] = useState<string | null>(null);
 
   const markStep = useCallback(
@@ -155,7 +157,7 @@ export default function ClaudeExtract(): React.JSX.Element {
       const result = await safeSendTabMessage(
         tabId,
         "CLAUDE_EXTRACT_PROJECTS",
-        { includeMemory, includeKnowledge },
+        { includeMemory, includeKnowledge, includeGlobal },
       );
 
       if (!result.success && result.projects.length === 0) {
@@ -171,16 +173,26 @@ export default function ClaudeExtract(): React.JSX.Element {
         (sum, p) => sum + (p.docs?.length ?? 0),
         0,
       );
+      const noteCount = result.globalMemory?.length ?? 0;
       const details = [
         `${projectCount} project${projectCount === 1 ? "" : "s"}`,
         ...(includeMemory ? [`${memoryCount} with memory`] : []),
         ...(includeKnowledge ? [`${docCount} knowledge doc${docCount === 1 ? "" : "s"}`] : []),
+        ...(includeGlobal
+          ? [
+              `${noteCount} memory note${noteCount === 1 ? "" : "s"}`,
+              ...(result.preferences ? ["your preferences"] : []),
+            ]
+          : []),
       ];
       markStep(0, "complete", `Found ${details.join(", ")}`);
 
       // Step 2: Generate manifest
       markStep(1, "active");
-      const manifest = generateClaudeManifest(result.projects, result.warnings);
+      const manifest = generateClaudeManifest(result.projects, result.warnings, {
+        memory: result.globalMemory,
+        preferences: result.preferences,
+      });
 
       const manifestId = `manifest-${Date.now()}`;
       await saveManifest(manifestId, manifest);
@@ -196,7 +208,14 @@ export default function ClaudeExtract(): React.JSX.Element {
       stopProgress();
       setProgressText(null);
     }
-  }, [markStep, setManifestId, readyTabId, includeMemory, includeKnowledge]);
+  }, [
+    markStep,
+    setManifestId,
+    readyTabId,
+    includeMemory,
+    includeKnowledge,
+    includeGlobal,
+  ]);
 
   // ─── Auto-advance ───────────────────────────────────────
 
@@ -251,6 +270,22 @@ export default function ClaudeExtract(): React.JSX.Element {
               <span className="block text-xs text-gray-500">
                 Text documents in each project. Uploaded images and PDFs
                 are listed so you can move them by hand.
+              </span>
+            </span>
+          </label>
+          <label className="flex items-start gap-2 text-sm text-gray-700">
+            <input
+              type="checkbox"
+              className="mt-0.5 h-4 w-4 rounded border-gray-300"
+              checked={includeGlobal}
+              onChange={(e) => setIncludeGlobal(e.target.checked)}
+            />
+            <span>
+              Your memory and preferences
+              <span className="block text-xs text-gray-500">
+                What Claude remembers about you outside projects, and your
+                &quot;Instructions for Claude&quot;. You can review them before
+                anything is moved.
               </span>
             </span>
           </label>
