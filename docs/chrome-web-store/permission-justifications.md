@@ -7,7 +7,14 @@
 
 ## `storage`
 
-PortSmith uses `chrome.storage.local` to remember the source and target platforms the user picked last, so the side panel wizard can pre-select them next time (`src/core/storage/preferences.ts`). Nothing stored with this API leaves the device. The side panel, service worker and content scripts all run in different contexts, and `chrome.storage.local` is the storage they share.
+> The 2026-03-03 review rejected version 0.1.0 under "Use of Permissions" (reference ID Purple Potassium) for "requesting but not using" `storage`. That was correct: `src/core/storage/preferences.ts` existed and was bundled, but nothing in the codebase ever called it. In 0.4.0 the API is called on ordinary user actions, at the call sites named below.
+
+PortSmith uses `chrome.storage.local` for two things, both on the device and neither leaving it.
+
+1. **Remembering the last platforms picked.** `setPreference("lastSourcePlatform", ...)` and `setPreference("lastTargetPlatform", ...)` run whenever the user picks a source or target in the wizard (`src/sidepanel/store/migration-store.ts`, `setSourcePlatform` and `setTargetPlatform`). `getPreference` reads both back when the side panel opens, so a returning user's platforms are pre-selected. The wrappers are in `src/core/storage/preferences.ts`.
+2. **Recording which Gemini memories were already saved.** `saveSavedMemoryIds` writes the IDs Gemini returned for memories PortSmith created (`src/core/storage/gemini-saved-memory.ts`, called from `src/background/migration-orchestrator.ts`). Gemini rewrites the text of what it saves and accepts duplicates, so its own list cannot be matched back against PortSmith's text. Without this record, resuming an interrupted migration would save every memory a second time.
+
+The side panel and the service worker run in different contexts and both need this data, and `chrome.storage.local` is the only storage they share. In the shipped build the calls appear in `assets/index.html-*.js` (side panel) and `assets/service-worker.ts-*.js`.
 
 ---
 
