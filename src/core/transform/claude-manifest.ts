@@ -10,11 +10,13 @@ import type {
 } from "@/core/schema/types";
 import type {
   ClaudeExtractionResult,
+  ExtractedClaudeMemoryEntry,
   ExtractedClaudeProject,
 } from "@/core/adapters/claude-dom-types";
 import { MANIFEST_VERSION, GENERATED_BY } from "@/shared/constants";
 import { getMimeType } from "./file-compatibility";
 import { categorize } from "./categorize";
+import { mapMemoryItems } from "./memory-mapper";
 
 // ─── Knowledge ──────────────────────────────────────────────
 
@@ -125,13 +127,52 @@ export function buildWorkspaceFromProject(
   };
 }
 
+// ─── Global memory ──────────────────────────────────────────
+
+const HEADING_LINE = /^\s*#{1,6}(?:\s|$)/;
+const LIST_MARKER = /^\s*(?:[-*+]|\d+[.)])\s+/;
+/** Claude's own labels at the start of a line, such as "[stated]". */
+const INTERNAL_TAG = /^\[[a-z_ -]+\]\s*/i;
+/** Notes about one person or area: each line needs the note's name. */
+const NAMED_NOTE_PATH = /^\/(?:people|areas)\//i;
+
+/**
+ * One memory fact per line of a note. Headings are dropped, list markers
+ * and internal tags removed, and lines of people and area notes get the
+ * note's title in front so they still make sense on their own.
+ */
+export function memoryNoteToFacts(note: ExtractedClaudeMemoryEntry): string[] {
+  const prefix =
+    NAMED_NOTE_PATH.test(note.path) && note.title.trim()
+      ? `${note.title.trim()}: `
+      : "";
+  const facts: string[] = [];
+  for (const raw of (note.body || note.summary).split("\n")) {
+    if (HEADING_LINE.test(raw)) continue;
+    let line = raw.replace(LIST_MARKER, "").trim();
+    while (INTERNAL_TAG.test(line)) line = line.replace(INTERNAL_TAG, "");
+    line = line.trim();
+    if (line) facts.push(prefix + line);
+  }
+  return facts;
+}
+
 // ─── Public API ─────────────────────────────────────────────
+
+export interface ClaudeGlobalData {
+  /** Memory notes outside projects (never project memory) */
+  memory?: ExtractedClaudeMemoryEntry[];
+  /** "Instructions for Claude" */
+  preferences?: string;
+}
 
 export function generateClaudeManifest(
   projects: ExtractedClaudeProject[],
   extractionWarnings: ClaudeExtractionResult["warnings"] = [],
+  global: ClaudeGlobalData = {},
 ): PortsmithManifest {
   const now = new Date().toISOString();
+  const memory = mapMemoryItems((global.memory ?? []).flatMap(memoryNoteToFacts));
 
   const workspaces = projects.map((p) => buildWorkspaceFromProject(p, now));
 
@@ -153,8 +194,8 @@ export function generateClaudeManifest(
       interests: [],
     },
     workspaces,
-    memory: [],
-    globalInstructions: "",
+    memory,
+    globalInstructions: global.preferences?.trim() ?? "",
     metadata: {
       generatedBy: GENERATED_BY,
       ...(extractionWarnings.length > 0

@@ -11,6 +11,11 @@
 //   system expose a per-project summary at GET /memory?project_uuid=.
 // - GET /projects/{id}/docs returns text knowledge docs with content;
 //   GET /projects/{id}/files lists binary uploads (metadata only).
+// - Memory files outside /projects/ are global (/profile.md, /preferences.md,
+//   /areas/*, /people/*, /topics/*). The older system has one summary at
+//   GET /memory.
+// - "Instructions for Claude" (Settings > Account) is
+//   GET /api/account_profile, field conversation_preferences.
 
 import { onMessage, initMessageRouter, sendMessage } from "@/shared/messaging";
 import type {
@@ -38,9 +43,12 @@ const MAX_PROJECTS = 5000;
 const CONCURRENCY = 4;
 const MAX_DOC_BYTES = 5_000_000;
 
+const MAX_GLOBAL_NOTES = 200;
+
 const DEFAULT_OPTIONS: ClaudeExtractionOptions = {
   includeMemory: true,
   includeKnowledge: true,
+  includeGlobal: true,
 };
 
 type RawRecord = Record<string, unknown>;
@@ -51,6 +59,12 @@ function str(value: unknown): string {
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/** Runs `fn` once and shares the result (or the failure) with every caller. */
+function once<T>(fn: () => Promise<T>): () => Promise<T> {
+  let result: Promise<T> | undefined;
+  return () => (result ??= fn());
 }
 
 function progress(step: string, percent: number): void {
@@ -205,22 +219,54 @@ export function toMemoryEntry(
 
 const PROJECT_MEMORY_PATH = /^\/projects\/([0-9a-f-]{36})\//i;
 
+/** Memory files outside any project are the user's global memory. */
+export function isGlobalMemoryPath(path: string): boolean {
+  return path.startsWith("/") && !/^\/projects\//i.test(path);
+}
+
+/** Memory settings and file list, each fetched at most once per extraction. */
+export interface MemorySource {
+  settings: () => Promise<RawRecord>;
+  paths: () => Promise<string[]>;
+}
+
+export function memorySource(orgId: string): MemorySource {
+  return {
+    settings: once(async () =>
+      (await claudeRequest<RawRecord>(`/api/organizations/${orgId}/memory/settings`)) ?? {},
+    ),
+    paths: once(async () => {
+      const list = await claudeRequest<RawRecord>(
+        `/api/organizations/${orgId}/melange/list`,
+        { method: "POST", body: "{}" },
+      );
+      const data = Array.isArray(list?.data) ? (list.data as RawRecord[]) : [];
+      return data.map((entry) => str(entry.path)).filter(Boolean);
+    }),
+  };
+}
+
+async function readMemoryNote(
+  orgId: string,
+  path: string,
+): Promise<ExtractedClaudeMemoryEntry | null> {
+  const raw = await claudeRequest<RawRecord>(
+    `/api/organizations/${orgId}/melange/read`,
+    { method: "POST", body: JSON.stringify({ path }) },
+  );
+  return toMemoryEntry(path, raw ?? {});
+}
+
 async function fetchMemoryEntries(
   orgId: string,
   projectIds: Set<string>,
   warnings: Warning[],
+  source: MemorySource,
 ): Promise<Map<string, ExtractedClaudeMemoryEntry[]>> {
   const byProject = new Map<string, ExtractedClaudeMemoryEntry[]>();
 
-  const list = await claudeRequest<RawRecord>(
-    `/api/organizations/${orgId}/melange/list`,
-    { method: "POST", body: "{}" },
-  );
-  const data = Array.isArray(list?.data) ? (list.data as RawRecord[]) : [];
-
   const wanted: Array<{ projectId: string; path: string }> = [];
-  for (const entry of data) {
-    const path = str(entry.path);
+  for (const path of await source.paths()) {
     const match = PROJECT_MEMORY_PATH.exec(path);
     const projectId = match?.[1]?.toLowerCase();
     if (projectId && projectIds.has(projectId)) {
@@ -232,11 +278,7 @@ async function fetchMemoryEntries(
   let done = 0;
   await mapWithConcurrency(wanted, CONCURRENCY, async ({ projectId, path }) => {
     try {
-      const raw = await claudeRequest<RawRecord>(
-        `/api/organizations/${orgId}/melange/read`,
-        { method: "POST", body: JSON.stringify({ path }) },
-      );
-      const entry = toMemoryEntry(path, raw ?? {});
+      const entry = await readMemoryNote(orgId, path);
       if (entry) {
         const list = byProject.get(projectId) ?? [];
         list.push(entry);
@@ -308,6 +350,7 @@ export async function fetchProjectMemory(
   orgId: string,
   projectIds: string[],
   warnings: Warning[],
+  source: MemorySource = memorySource(orgId),
 ): Promise<{
   source: "entries" | "summary" | null;
   byProject: Map<string, ExtractedClaudeMemoryEntry[]>;
@@ -317,9 +360,7 @@ export async function fetchProjectMemory(
 
   let settings: RawRecord;
   try {
-    settings = (await claudeRequest<RawRecord>(
-      `/api/organizations/${orgId}/memory/settings`,
-    )) ?? {};
+    settings = await source.settings();
   } catch (err) {
     warnings.push({
       context: "memory",
@@ -332,7 +373,7 @@ export async function fetchProjectMemory(
 
   if (settings.memory_mode === "melange") {
     try {
-      const byProject = await fetchMemoryEntries(orgId, new Set(ids), warnings);
+      const byProject = await fetchMemoryEntries(orgId, new Set(ids), warnings, source);
       return { source: "entries", byProject };
     } catch (err) {
       warnings.push({
@@ -344,6 +385,95 @@ export async function fetchProjectMemory(
 
   const byProject = await fetchMemorySummaries(orgId, ids, warnings);
   return { source: "summary", byProject };
+}
+
+// ─── Global memory & preferences ───────────────────────────────
+
+/** Memory that belongs to no project. Failures become warnings. */
+export async function fetchGlobalMemory(
+  orgId: string,
+  warnings: Warning[],
+  source: MemorySource = memorySource(orgId),
+): Promise<ExtractedClaudeMemoryEntry[]> {
+  let settings: RawRecord;
+  try {
+    settings = await source.settings();
+  } catch (err) {
+    warnings.push({
+      context: "memory",
+      message: `Your Claude memory was skipped (memory settings unavailable: ${errorMessage(err)})`,
+    });
+    return [];
+  }
+
+  if (settings.memory_mode === "melange") {
+    try {
+      const all = (await source.paths()).filter(isGlobalMemoryPath).sort();
+      const paths = all.slice(0, MAX_GLOBAL_NOTES);
+      if (all.length > paths.length) {
+        warnings.push({
+          context: "memory",
+          message: `Only the first ${paths.length} of your ${all.length} memory notes were read`,
+        });
+      }
+      let failed = 0;
+      const entries = await mapWithConcurrency(paths, CONCURRENCY, async (path) => {
+        try {
+          return await readMemoryNote(orgId, path);
+        } catch {
+          failed++;
+          return null;
+        }
+      });
+      if (failed > 0) {
+        warnings.push({
+          context: "memory",
+          message: `${failed} of your memory note(s) could not be read and were skipped`,
+        });
+      }
+      return entries.filter((e): e is ExtractedClaudeMemoryEntry => e !== null);
+    } catch (err) {
+      warnings.push({
+        context: "memory",
+        message: `Could not list your memory notes (${errorMessage(err)}); trying the older memory format`,
+      });
+    }
+  }
+
+  try {
+    const raw = await claudeRequest<RawRecord>(`/api/organizations/${orgId}/memory`);
+    const memory = str(raw?.memory).trim();
+    if (!memory) return [];
+    return [
+      {
+        path: "memory:global",
+        title: "",
+        summary: "",
+        body: memory,
+        updatedAt: str(raw?.updated_at),
+      },
+    ];
+  } catch (err) {
+    warnings.push({
+      context: "memory",
+      message: `Your Claude memory could not be read (${errorMessage(err)})`,
+    });
+    return [];
+  }
+}
+
+/** "Instructions for Claude" from Settings > Account, or "" on failure. */
+export async function fetchPreferences(warnings: Warning[]): Promise<string> {
+  try {
+    const raw = await claudeRequest<RawRecord>("/api/account_profile");
+    return str(raw?.conversation_preferences).trim();
+  } catch (err) {
+    warnings.push({
+      context: "preferences",
+      message: `Your personal preferences could not be read (${errorMessage(err)}). Copy them from Claude's settings if you need them.`,
+    });
+    return "";
+  }
 }
 
 // ─── Extraction ────────────────────────────────────────────────
@@ -367,6 +497,19 @@ export async function extractProjects(
       ],
     };
   }
+
+  const source = memorySource(orgId);
+  const readGlobal = async (): Promise<
+    Pick<ClaudeExtractionResult, "globalMemory" | "preferences">
+  > => {
+    if (!options.includeGlobal) return {};
+    progress("Reading your memory and preferences", 96);
+    const [globalMemory, preferences] = await Promise.all([
+      fetchGlobalMemory(orgId, warnings, source),
+      fetchPreferences(warnings),
+    ]);
+    return { globalMemory, preferences };
+  };
 
   progress("Listing your projects", 5);
 
@@ -404,7 +547,9 @@ export async function extractProjects(
       context: "api",
       message: "No projects found in your Claude account",
     });
-    return { success: true, projects: [], warnings };
+    const global = await readGlobal();
+    progress("Done", 100);
+    return { success: true, projects: [], warnings, ...global };
   }
 
   const valid = rawProjects.filter((raw) => {
@@ -504,6 +649,7 @@ export async function extractProjects(
       orgId,
       projects.map((p) => p.id),
       warnings,
+      source,
     );
     for (const project of projects) {
       const entries = memory.byProject.get(project.id.toLowerCase());
@@ -514,8 +660,10 @@ export async function extractProjects(
     }
   }
 
+  const global = await readGlobal();
+
   progress("Done", 100);
-  return { success: true, projects, warnings };
+  return { success: true, projects, warnings, ...global };
 }
 
 // ─── Message Handlers ──────────────────────────────────────────
