@@ -93,6 +93,46 @@ So the refusal was not about the text. Note the timings: this group ran slower
 than the rest (6 to 9 seconds), and the refusal it came from took 10.1 seconds.
 Slow replies and transient refusals appear together.
 
+## Gemini rewrites what it saves, and accepts duplicates
+
+Two behaviours that together break any attempt to work out what is already
+saved by comparing text.
+
+**It rewrites the wording.** An entry sent as "Goes by Er, also Henry or Erik"
+comes back stored as "I go by both Henry and Erik." This is more than the
+capitalisation and final-period tidying noted earlier: the sentence is
+reworded. `savedInfoKey` normalises case and punctuation, so it cannot match
+these. On a live account of ~194 entries the text comparison matched about 18.
+A rerun therefore treated ~190 already-saved memories as missing and sent them
+again, reporting 43 of 234.
+
+**It does not reject duplicates.** The probe sent an exact duplicate of an
+entry saved a minute earlier. It saved, as a second entry, in 1951 ms with a
+normal reply. The probe's 18 successful saves produced exactly 18 new entries,
+the control and its duplicate among them.
+
+So there is **no distinct "already saved" error code to map**: a repeat send
+is not refused, it is stored again. Anything that re-sends a memory already in
+the account adds a duplicate rather than being harmlessly ignored.
+
+The consequence is that the only reliable record of what has been saved is the
+one PortSmith keeps itself: `src/core/storage/gemini-saved-memory.ts` stores
+the memory IDs per manifest and Google account in `chrome.storage.local`.
+
+### The gap that record does not close
+
+That store only helps from the run that wrote it onwards. For an account whose
+memories were saved by an earlier build, the store is empty, so the next run
+still counts ~190 already-saved memories as missing and re-sends them. Given
+the two behaviours above, that either adds ~190 duplicates or gets refused
+under the load of sending them.
+
+Backfilling the store is not possible by matching text, for exactly the reason
+this section describes. Closing it needs one of: a one-time "treat everything
+in this manifest as already saved" action the user confirms, matching on
+something other than the stored wording, or accepting the duplicates. **None of
+these is implemented, and no live rerun should be started until one is.**
+
 ## What this changes in PortSmith
 
 1. `SAVED_INFO_API_MAX_LENGTH = 1500` is the real create limit, separate from
@@ -128,6 +168,11 @@ Slow replies and transient refusals appear together.
   turn out to be common, lowering the concurrency is the next thing to try.
 - **Whether Gemini has an upper bound on the number of entries.** The account
   under test held 194 and took 18 more without complaint.
+- **Why ~190 re-sent memories were refused on the live rerun**, when the probe
+  shows duplicates are normally accepted. The most likely explanation is the
+  transient refusal above, triggered by sending ~190 entries 6 at a time, which
+  would also explain why 20 of them got through. Not measured: doing so means
+  writing into a real account. If it holds, lowering the concurrency is the fix.
 
 ## How this was run
 
