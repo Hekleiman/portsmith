@@ -1,28 +1,38 @@
 // ─── Gemini Session Management ──────────────────────────────
-// Shared session initialisation for Gemini content scripts.
-// Fetches the app page, extracts CSRF token + session params.
+// Shared session initialisation for the Gemini content scripts (extractor
+// and importer). Fetches the app page, extracts CSRF token + session params.
 //
-// NOTE: The extractor has its own inline copy of this logic.
-// Both modules maintain independent session caches, which is
-// fine — they read the same server-side tokens.
+// Google serves each signed-in account under its own path prefix
+// (/u/1/app, /u/2/app; none for the default account). Tokens only work
+// with the prefix they came from, so the session follows the account of
+// the tab this script runs in (verified against gemini.google.com, Sep 2026).
 
-import type { GeminiSession } from "./batchexecute";
-
-const GEMINI_APP_URL = "https://gemini.google.com/app";
+import { GEMINI_ORIGIN, type GeminiSession } from "./batchexecute";
 
 let cachedSession: GeminiSession | null = null;
 
+/** "/u/N" for a secondary account's page, "" for the default account. */
+export function accountPrefix(pathname: string): string {
+  return /^\/u\/\d+(?=\/|$)/.exec(pathname)?.[0] ?? "";
+}
+
+function currentPrefix(): string {
+  return accountPrefix(globalThis.location?.pathname ?? "");
+}
+
 /**
- * Fetch the Gemini app page and extract session tokens via regex.
+ * Fetch the Gemini app page for this tab's account and extract session
+ * tokens via regex.
  *
  * Tokens extracted:
- * - SNlM0e  → CSRF / access token (required)
- * - cfb2h   → build label
- * - FdrFJe  → session ID
- * - TuX5cc  → language code
+ * - SNlM0e: CSRF / access token (required)
+ * - cfb2h: build label
+ * - FdrFJe: session ID
+ * - TuX5cc: language code
  */
 export async function initSession(): Promise<GeminiSession> {
-  const response = await fetch(GEMINI_APP_URL, {
+  const prefix = currentPrefix();
+  const response = await fetch(`${GEMINI_ORIGIN}${prefix}/app`, {
     credentials: "include",
   });
 
@@ -45,15 +55,18 @@ export async function initSession(): Promise<GeminiSession> {
   const sessionId = html.match(/"FdrFJe":\s*"(.*?)"/)?.[1];
   const language = html.match(/"TuX5cc":\s*"(.*?)"/)?.[1] ?? "en";
 
-  cachedSession = { accessToken, buildLabel, sessionId, language };
+  cachedSession = { accessToken, buildLabel, sessionId, language, prefix };
   return cachedSession;
 }
 
 /**
- * Get the current session, initialising if needed.
+ * Get the current session, initialising if needed (or if the tab has
+ * moved to another account since).
  */
 export async function getSession(): Promise<GeminiSession> {
-  if (cachedSession) return cachedSession;
+  if (cachedSession && cachedSession.prefix === currentPrefix()) {
+    return cachedSession;
+  }
   return initSession();
 }
 

@@ -47,6 +47,21 @@ function normalizeTarget(value: string | null | undefined): Target {
 
 // ─── Orchestrator ───────────────────────────────────────────
 
+const GEMINI_TABS = "https://gemini.google.com/*";
+const GEMINI_TAB_URL = /^https:\/\/gemini\.google\.com\//;
+
+/** Google account path of a Gemini URL: "/u/1/", or "/u/0/" without one. */
+export function geminiAccountPath(url: string | undefined): string {
+  const match = /^https:\/\/gemini\.google\.com\/u\/(\d+)(?:[/?#]|$)/.exec(url ?? "");
+  return `/u/${match?.[1] ?? "0"}/`;
+}
+
+function geminiAppUrl(account: string | null): string {
+  return !account || account === "/u/0/"
+    ? "https://gemini.google.com/app"
+    : `https://gemini.google.com${account}app`;
+}
+
 export class MigrationOrchestrator {
   private phase: OrchestratorStatus["phase"] = "idle";
   private mode: DeliveryMode | null = null;
@@ -73,6 +88,8 @@ export class MigrationOrchestrator {
   private projectMemoryWorkspaceIds: string[] = [];
   private memoryImported: boolean | null = null;
   private migrationTabId: number | null = null;
+  /** Google account path of the pinned Gemini tab, e.g. "/u/1/" */
+  private geminiAccount: string | null = null;
   private duplicateTabWarning: string | null = null;
 
   /**
@@ -407,15 +424,63 @@ export class MigrationOrchestrator {
     return tabId;
   }
 
+  /**
+   * The Gemini tab for this run. Once picked, the run stays with that tab's
+   * Google account: requests from a /u/1/ tab act on that account only.
+   */
+  private async getGeminiTab(): Promise<number | null> {
+    if (this.migrationTabId !== null) {
+      try {
+        const tab = await chrome.tabs.get(this.migrationTabId);
+        if (
+          tab &&
+          GEMINI_TAB_URL.test(tab.url ?? "") &&
+          (this.geminiAccount === null || geminiAccountPath(tab.url) === this.geminiAccount)
+        ) {
+          return this.migrationTabId;
+        }
+      } catch {
+        // Tab was closed
+      }
+      this.migrationTabId = null;
+    }
+
+    try {
+      const [active, all] = await Promise.all([
+        chrome.tabs.query({ url: GEMINI_TABS, active: true, currentWindow: true }),
+        chrome.tabs.query({ url: GEMINI_TABS }),
+      ]);
+      const tab = [...active, ...all].find(
+        (t) =>
+          t.id != null &&
+          (this.geminiAccount === null || geminiAccountPath(t.url) === this.geminiAccount),
+      );
+      if (tab?.id != null) {
+        this.migrationTabId = tab.id;
+        this.geminiAccount ??= geminiAccountPath(tab.url);
+        return tab.id;
+      }
+    } catch {
+      // Not in extension context
+    }
+    return null;
+  }
+
   private async checkDuplicateTabs(): Promise<string | null> {
     if (this.targetPlatform === "chatgpt") return null;
     const urlPattern =
-      this.targetPlatform === "gemini"
-        ? "https://gemini.google.com/*"
-        : "https://claude.ai/*";
+      this.targetPlatform === "gemini" ? GEMINI_TABS : "https://claude.ai/*";
 
     try {
       const tabs = await chrome.tabs.query({ url: urlPattern });
+      if (this.targetPlatform === "gemini") {
+        const accounts = [...new Set(tabs.map((t) => geminiAccountPath(t.url)))].sort();
+        if (accounts.length > 1) {
+          await this.getGeminiTab();
+          const using = this.geminiAccount ?? "/u/0/";
+          return `Gemini is open in ${accounts.length} Google accounts (${accounts.join(", ")}). PortSmith will use the account at gemini.google.com${using}. Close the Gemini tabs of the other accounts so no Gem ends up in the wrong account.`;
+        }
+      }
       if (tabs.length > 1) {
         return `${tabs.length} ${platformLabel(this.targetPlatform)} tabs are open. PortSmith uses one of them; close the extras if you run into problems.`;
       }
@@ -713,15 +778,16 @@ export class MigrationOrchestrator {
       status: "running",
     });
 
-    let tabId = await this.findTab("https://gemini.google.com/*");
+    let tabId = await this.getGeminiTab();
     if (!this.isCurrent(run)) return;
     if (tabId === null) {
       try {
         const tab = await chrome.tabs.create({
-          url: "https://gemini.google.com/app",
+          url: geminiAppUrl(this.geminiAccount),
           active: false,
         });
         tabId = tab.id ?? null;
+        this.migrationTabId = tabId;
         // Give the page time to load before messaging it
         await new Promise((r) => setTimeout(r, 3000));
       } catch {
@@ -968,6 +1034,7 @@ export class MigrationOrchestrator {
     this.pauseRequested = false;
     this.pauseResolver = null;
     this.migrationTabId = null;
+    this.geminiAccount = null;
     this.duplicateTabWarning = null;
   }
 }
