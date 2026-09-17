@@ -651,7 +651,7 @@ describe("MigrationOrchestrator: Gemini accounts", () => {
 
     // The user switches to the default-account tab mid-run: PortSmith stays put.
     openTabs([30, 31], 30);
-    await waitFor(() => o.getStatus().phase === "complete");
+    await finishGeminiRun(o);
     const geminiTabs = new Set(h.tabMessages.filter((m) => m.name.startsWith("GEMINI_")).map((m) => m.tabId));
     expect([...geminiTabs]).toEqual([31]);
     expect(h.tabMessages.filter((m) => m.name === "GEMINI_CREATE_GEM")).toHaveLength(2);
@@ -676,7 +676,7 @@ describe("MigrationOrchestrator: Gemini accounts", () => {
     putManifest("m1", [ws("a"), ws("b")]);
     const o = new MigrationOrchestrator();
     await o.start("m1", "autofill", ["a", "b"], "gemini");
-    await waitFor(() => o.getStatus().phase === "complete");
+    await finishGeminiRun(o);
 
     const creates = h.tabMessages.filter((m) => m.name === "GEMINI_CREATE_GEM");
     expect(creates.map((m) => m.tabId)).toEqual([31, 32]);
@@ -690,7 +690,7 @@ describe("MigrationOrchestrator: Gemini accounts", () => {
     expect(o.getStatus().duplicateTabWarning).toBe(
       "2 Gemini tabs are open. PortSmith uses one of them; close the extras if you run into problems.",
     );
-    await waitFor(() => o.getStatus().phase === "complete");
+    await finishGeminiRun(o);
     expect(new Set(h.tabMessages.filter((m) => m.name.startsWith("GEMINI_")).map((m) => m.tabId))).toEqual(new Set([31]));
   });
 });

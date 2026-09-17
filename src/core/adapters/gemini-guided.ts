@@ -175,9 +175,10 @@ export const GEMINI_IMPORT_URL = "https://gemini.google.com/import";
 
 const CHAT_EXPORT_STEPS: Partial<Record<SourcePlatform, string>> = {
   chatgpt:
-    "In ChatGPT, click your name at the bottom left, then Settings and Data controls. " +
-    'Next to "Export data", click "Export", then "Confirm Export". ' +
-    "ChatGPT emails you a link to download a .zip file.",
+    "In ChatGPT, open your profile menu, then Settings and Data controls. " +
+    'Under "Export data", click "Export", then "Confirm export". ' +
+    "ChatGPT sends a download link for a .zip file by email or text message when the export is ready, " +
+    "which can take up to 7 days. The link expires 24 hours after you receive it.",
   claude:
     "In Claude, click your name at the bottom left, then Settings and Privacy. " +
     'Next to "Export data", click "Export", choose the date range and click "Export" again. ' +

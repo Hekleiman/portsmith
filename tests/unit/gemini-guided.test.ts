@@ -30,7 +30,11 @@ describe("buildGeminiChatImportStep", () => {
     expect(step?.optional).toBe(true);
     expect(step?.description).toContain("In ChatGPT");
     expect(step?.description).toContain("Data controls");
-    expect(step?.description).toContain('"Confirm Export"');
+    expect(step?.description).toContain('"Confirm export"');
+    expect(step?.description).not.toContain("Confirm Export");
+    expect(step?.description).toContain("by email or text message");
+    expect(step?.description).toContain("up to 7 days");
+    expect(step?.description).toContain("expires 24 hours after you receive it");
     expect(step?.description).not.toContain("Privacy");
   });
 
