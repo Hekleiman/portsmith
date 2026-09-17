@@ -27,7 +27,10 @@ import {
 import { base64ToBytes } from "@/shared/encoding";
 import {
   createSavedInfoRequest,
+  listSavedInfoRequest,
   parseCreateSavedInfoResponse,
+  parseListSavedInfoResponse,
+  type SavedInfoEntry,
 } from "./saved-info";
 
 // ─── RPC Constants ──────────────────────────────────────────
@@ -298,6 +301,27 @@ export async function uploadKnowledgeFile(
   }
 }
 
+/** Everything in "Your instructions for Gemini", page by page. */
+export async function listMemories(): Promise<
+  { success: true; entries: SavedInfoEntry[] } | { success: false; error: string }
+> {
+  const entries: SavedInfoEntry[] = [];
+  let token: string | undefined;
+  try {
+    for (let page = 0; page < 100; page++) {
+      const frames = await executeWithRetry([listSavedInfoRequest(token)]);
+      const result = parseListSavedInfoResponse(frames);
+      if (!result) return { success: false, error: "Gemini's list reply had an unexpected shape" };
+      entries.push(...result.entries);
+      if (!result.nextPageToken) return { success: true, entries };
+      token = result.nextPageToken;
+    }
+    return { success: false, error: "Too many pages" };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : "request failed" };
+  }
+}
+
 /**
  * Save entries to "Your instructions for Gemini", a few at a time.
  * Each entry is its own request, like the page's "Add" button.
@@ -389,6 +413,13 @@ onMessage("GEMINI_UPDATE_GEM", async (req) => {
 
 onMessage("GEMINI_UPLOAD_KNOWLEDGE_FILE", async (req) => {
   return uploadKnowledgeFile(req.fileName, req.mimeType, req.base64);
+});
+
+onMessage("GEMINI_LIST_MEMORIES", async () => {
+  const result = await listMemories();
+  return result.success
+    ? { success: true, texts: result.entries.map((e) => e.text) }
+    : { success: false, error: result.error };
 });
 
 onMessage("GEMINI_SAVE_MEMORIES", async (req) => {

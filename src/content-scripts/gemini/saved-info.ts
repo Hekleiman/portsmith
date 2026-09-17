@@ -15,6 +15,12 @@ import {
 } from "./batchexecute";
 
 export const RPC_CREATE_SAVED_INFO = "xVRQX";
+/** BardFrontendService.ListMemories: request [pageSize, pageToken?] */
+export const RPC_LIST_SAVED_INFO = "ZKcapf";
+/** The page asks for 100 per page. */
+export const SAVED_INFO_PAGE_SIZE = 100;
+/** The saved-info editor's maxlength. */
+export const SAVED_INFO_MAX_LENGTH = 10_000;
 
 export interface SavedInfoEntry {
   id: string;
@@ -31,6 +37,36 @@ export function createSavedInfoRequest(text: string, identifier = "generic"): RP
     payload: buildCreateSavedInfoPayload(text),
     identifier,
   };
+}
+
+export function listSavedInfoRequest(pageToken?: string): RPCPayload {
+  return {
+    rpcid: RPC_LIST_SAVED_INFO,
+    payload: JSON.stringify(
+      pageToken ? [SAVED_INFO_PAGE_SIZE, pageToken] : [SAVED_INFO_PAGE_SIZE],
+    ),
+  };
+}
+
+/** One page of a ZKcapf reply: `[[entry, …], nextPageToken?]`. */
+export function parseListSavedInfoResponse(
+  frames: unknown[],
+): { entries: SavedInfoEntry[]; nextPageToken: string | null } | null {
+  for (const frame of frames) {
+    if (!Array.isArray(frame) || frame[0] !== "wrb.fr" || frame[1] !== RPC_LIST_SAVED_INFO) {
+      continue;
+    }
+    const body = extractResponseBody(frame);
+    if (!Array.isArray(body)) return null;
+    const rows = Array.isArray(body[0]) ? (body[0] as unknown[]) : [];
+    const entries = rows
+      .map((row) => (Array.isArray(row) ? row : []))
+      .filter((row) => typeof row[0] === "string" && typeof row[1] === "string")
+      .map((row) => ({ id: row[0] as string, text: row[1] as string }));
+    const token: unknown = body[1];
+    return { entries, nextPageToken: typeof token === "string" && token ? token : null };
+  }
+  return null;
 }
 
 /** The entry Gemini saved, from the frames of an xVRQX reply. */

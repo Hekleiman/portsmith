@@ -10,7 +10,9 @@ import { buildLeftoverCards } from "@/core/adapters/leftover-cards";
 import { decodeResponse, encodeRequest } from "@/content-scripts/gemini/batchexecute";
 import {
   createSavedInfoRequest,
+  listSavedInfoRequest,
   parseCreateSavedInfoResponse,
+  parseListSavedInfoResponse,
   savedInfoKey,
 } from "@/content-scripts/gemini/saved-info";
 
@@ -189,6 +191,37 @@ describe("Gemini saved info (recorded Sep 2026)", () => {
       text: "I prefer short concise responses.",
     });
     expect(parseCreateSavedInfoResponse(decodeResponse(")]}'\n\n25\n[[\"e\",4,null,null,330]]\n"))).toBeNull();
+  });
+
+  it("lists saved info page by page like the page does", () => {
+    expect(listSavedInfoRequest().payload).toBe("[100]");
+    expect(listSavedInfoRequest("tok").payload).toBe('[100,"tok"]');
+    const first = String.raw`)]}'
+
+387
+[["wrb.fr","ZKcapf","[[[\"00065bb016e6aa7402ef18f66e168e2dea703354c7771a69\",\"I prefer short concise responses.\",[1789661716,849666000],null,[1789661716,849666000],null,null,null,null,2,1]],\"tCkwBQvCSjBxlmle7uW21HMatBrYxsTb7XtkGVXYhDpFz2GRwM85h+TLsV6/JkWSWTIoM771xmPDA3ovWi+sNR7FccSo2S+3tfJOeixxo\"]",null,null,null,"generic"],["di",154],["af.httprm",154,"-5012897955215166960",10]]
+25
+[["e",4,null,null,423]]
+`;
+    expect(parseListSavedInfoResponse(decodeResponse(first))).toEqual({
+      entries: [{ id: "00065bb016e6aa7402ef18f66e168e2dea703354c7771a69", text: "I prefer short concise responses." }],
+      nextPageToken: "tCkwBQvCSjBxlmle7uW21HMatBrYxsTb7XtkGVXYhDpFz2GRwM85h+TLsV6/JkWSWTIoM771xmPDA3ovWi+sNR7FccSo2S+3tfJOeixxo",
+    });
+    const last = String.raw`)]}'
+
+108
+[["wrb.fr","ZKcapf","[]",null,null,null,"generic"],["di",167],["af.httprm",167,"-2098518060154352639",10]]
+25
+[["e",4,null,null,144]]
+`;
+    expect(parseListSavedInfoResponse(decodeResponse(last))).toEqual({ entries: [], nextPageToken: null });
+    // Signed out: no body, only an error code
+    const signedOut = String.raw`)]}'
+
+104
+[["wrb.fr","ZKcapf",null,null,null,[7],"generic"],["di",41],["af.httprm",41,"1056582788776354194",11]]
+`;
+    expect(parseListSavedInfoResponse(decodeResponse(signedOut))).toBeNull();
   });
 
   it("compares entries the way Gemini rewrites them", () => {

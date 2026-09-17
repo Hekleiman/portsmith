@@ -26,6 +26,10 @@ import {
 } from "@/core/transform/project-memory";
 import { textToBase64 } from "@/shared/encoding";
 import {
+  SAVED_INFO_MAX_LENGTH,
+  savedInfoKey,
+} from "@/content-scripts/gemini/saved-info";
+import {
   getInstructionsForTarget,
   isPlatformId,
   platformLabel,
@@ -599,7 +603,6 @@ export class MigrationOrchestrator {
     if (wanted.length === 0) return;
 
     const done = new Set(this.savedMemoryIds);
-    const todo = wanted.filter((w) => !done.has(w.id));
     const stepId = "memory-save";
     const progress = (): void => {
       this.currentSteps = [
@@ -612,8 +615,28 @@ export class MigrationOrchestrator {
     };
     progress();
 
-    const tabId = todo.length > 0 ? await this.getGeminiTab() : null;
+    const tabId = wanted.some((w) => !done.has(w.id)) ? await this.getGeminiTab() : null;
     if (!this.isCurrent(run)) return;
+
+    // Skip what's already in Gemini (a repeated run, or added by hand).
+    if (tabId !== null) {
+      try {
+        const existing = await safeSendTabMessage(tabId, "GEMINI_LIST_MEMORIES");
+        if (!this.isCurrent(run)) return;
+        if (existing.success && existing.texts) {
+          const keys = new Set(existing.texts.map(savedInfoKey));
+          for (const w of wanted) if (keys.has(savedInfoKey(w.text))) done.add(w.id);
+        } else {
+          console.warn(`[PortSmith] Couldn't list Gemini's saved info: ${existing.error ?? "unknown error"}`);
+        }
+      } catch (err) {
+        if (!this.isCurrent(run)) return;
+        console.warn(`[PortSmith] Couldn't list Gemini's saved info: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      progress();
+    }
+    // Longer than the editor allows: leave it for the paste step.
+    const todo = wanted.filter((w) => !done.has(w.id) && w.text.length <= SAVED_INFO_MAX_LENGTH);
 
     const CHUNK = 10;
     for (let i = 0; tabId !== null && i < todo.length; i += CHUNK) {

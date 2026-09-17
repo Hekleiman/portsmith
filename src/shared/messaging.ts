@@ -431,6 +431,11 @@ export interface MessageMap {
     request: { fileName: string; mimeType: string; base64: string };
     response: { success: boolean; handle?: string; error?: string };
   };
+  /** Texts already in "Your instructions for Gemini" */
+  GEMINI_LIST_MEMORIES: {
+    request: void;
+    response: { success: boolean; texts?: string[]; error?: string };
+  };
   /** Add entries to "Your instructions for Gemini" (one per text) */
   GEMINI_SAVE_MEMORIES: {
     request: { texts: string[] };
@@ -519,6 +524,7 @@ const MESSAGE_TIMEOUT_OVERRIDES: Partial<Record<MessageName, number>> = {
   GEMINI_UPLOAD_KNOWLEDGE_FILE: 180_000,
   // Up to 10 entries per message, each can take several seconds
   GEMINI_SAVE_MEMORIES: 180_000,
+  GEMINI_LIST_MEMORIES: 60_000,
   FETCH_GIZMO_API: 30_000,
 };
 

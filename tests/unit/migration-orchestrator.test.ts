@@ -180,6 +180,7 @@ function geminiTab(
       };
     }
     if (name === "GEMINI_CREATE_GEM") return create((payload as { name: string }).name);
+    if (name === "GEMINI_LIST_MEMORIES") return { success: true, texts: [] };
     if (name === "GEMINI_SAVE_MEMORIES") {
       const texts = (payload as { texts: string[] }).texts;
       return { results: texts.map((text, i) => ({ text, success: true, id: `mem-${i}` })) };
@@ -906,6 +907,40 @@ describe("MigrationOrchestrator: Gemini memories", () => {
       .flatMap((m) => (m.payload as { texts: string[] }).texts);
     expect(texts).toEqual(["Fact number 2"]);
     expect(o.getStatus().memoryAutoSaved).toEqual({ saved: 3, total: 3 });
+  });
+
+  it("skips memories Gemini already has", async () => {
+    putManifest("m1", [ws("a")], { memory: memories(3) });
+    const base = geminiTab();
+    h.tabResponder = (name, payload) =>
+      name === "GEMINI_LIST_MEMORIES"
+        ? { success: true, texts: ["fact number 1.", "Something else"] }
+        : base(name, payload);
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "autofill", ["a"], "gemini");
+    await finishGeminiRun(o);
+    const texts = h.tabMessages
+      .filter((m) => m.name === "GEMINI_SAVE_MEMORIES")
+      .flatMap((m) => (m.payload as { texts: string[] }).texts);
+    expect(texts).toEqual(["Fact number 0", "Fact number 2"]);
+    expect(o.getStatus().memoryAutoSaved).toEqual({ saved: 3, total: 3 });
+  });
+
+  it("still saves when the list can't be read, and leaves over-long text for pasting", async () => {
+    const long = { ...memories(1)[0]!, id: "long", fact: "x".repeat(10_001) };
+    putManifest("m1", [ws("a")], { memory: [...memories(1), long] });
+    const base = geminiTab();
+    h.tabResponder = (name, payload) =>
+      name === "GEMINI_LIST_MEMORIES" ? { success: false, error: "HTTP 500" } : base(name, payload);
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "autofill", ["a"], "gemini");
+    await waitFor(() => o.getStatus().phase === "memory", "memory");
+    const texts = h.tabMessages
+      .filter((m) => m.name === "GEMINI_SAVE_MEMORIES")
+      .flatMap((m) => (m.payload as { texts: string[] }).texts);
+    expect(texts).toEqual(["Fact number 0"]);
+    expect(o.getStatus().memoryAutoSaved).toEqual({ saved: 1, total: 2 });
+    expect(o.getStatus().memorySteps.map((st) => st.id)).toContain("memory-paste");
   });
 
   it("keeps the copy-and-paste steps in guided mode", async () => {
