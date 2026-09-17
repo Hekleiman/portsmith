@@ -616,7 +616,7 @@ export default function Migrate(): React.JSX.Element {
               </h2>
               <p className="mt-1 text-xs text-gray-600">
                 {status.memoryAutoSaved
-                  ? `PortSmith saved ${status.memoryAutoSaved.saved} of ${status.memoryAutoSaved.total} to ${targetName}. ${targetName} didn't accept the rest, so add them with a quick copy and paste.`
+                  ? `PortSmith saved ${status.memoryAutoSaved.saved} of ${status.memoryAutoSaved.total} to ${targetName} by itself. The remaining ${status.memoryAutoSaved.total - status.memoryAutoSaved.saved} are listed below, with a button to copy them and a button to open the page they go on.`
                   : `${targetName} takes memories through its own import, so this part is a quick copy and paste.`}
               </p>
             </>

@@ -55,11 +55,7 @@ describe("buildGeminiChatImportStep", () => {
 describe("generateGeminiMemoryInstructions with chat history", () => {
   it("adds the chat step after the memory steps", () => {
     const steps = generateGeminiMemoryInstructions(ITEMS, "ChatGPT", "", "chatgpt");
-    expect(steps.map((s) => s.id)).toEqual([
-      "memory-open-import",
-      "memory-paste",
-      "memory-chat-history",
-    ]);
+    expect(steps.map((s) => s.id)).toEqual(["memory-paste", "memory-chat-history"]);
     expect(steps.filter((s) => s.optional)).toHaveLength(1);
   });
 
@@ -70,7 +66,7 @@ describe("generateGeminiMemoryInstructions with chat history", () => {
 
   it("leaves the memory steps unchanged without a source platform", () => {
     const steps = generateGeminiMemoryInstructions(ITEMS, "ChatGPT");
-    expect(steps.map((s) => s.id)).toEqual(["memory-open-import", "memory-paste"]);
+    expect(steps.map((s) => s.id)).toEqual(["memory-paste"]);
     expect(generateGeminiMemoryInstructions([], "ChatGPT")).toEqual([]);
   });
 });

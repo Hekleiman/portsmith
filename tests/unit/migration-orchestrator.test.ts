@@ -884,9 +884,11 @@ describe("MigrationOrchestrator: Gemini memories", () => {
     expect(status.memoryAutoSaved).toEqual({ saved: 2, total: 3, reasons: ["1× HTTP 400"] });
     expect(status.memoryImported).toBeNull();
     const paste = status.memorySteps.find((st) => st.id === "memory-paste");
-    expect(paste?.title).toBe("Paste your 1 memory");
-    expect(paste?.description).toContain("Gemini refused to save these one by one");
-    expect(paste?.description).toContain("1× HTTP 400");
+    expect(paste?.title).toBe("Add the 1 memory Gemini didn't take");
+    expect(paste?.description).toContain("Gemini's reason: 1× HTTP 400");
+    expect(paste?.description).toContain("What's missing:");
+    expect(paste?.description).toContain("Fact number 1");
+    expect(paste?.actions?.[0]?.label).toBe("Copy, then open Gemini's import page");
     expect(paste?.copyBlocks[0]?.content).toContain("Fact number 1");
     expect(paste?.copyBlocks[0]?.content).not.toContain("Fact number 0");
     expect(h.checkpoints[h.checkpoints.length - 1]!.state.savedMemoryIds).toEqual(["m0", "m2"]);

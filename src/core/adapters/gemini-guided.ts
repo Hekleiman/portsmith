@@ -175,42 +175,51 @@ export function generateGeminiMemoryInstructions(
   const chatImport = buildGeminiChatImportStep(sourcePlatform);
   const block = renderMemoryImportText(items, sourceLabel, customInstructions);
   if (!block) return chatImport ? [chatImport] : [];
+
+  // Name what is missing, so it's clear this is the leftover and not
+  // everything. The first lines of each memory are the recognisable part.
+  const preview = items.slice(0, 5).map((i) => `• ${firstLine(i.fact)}`);
+  const more = items.length - preview.length;
   const what =
     items.length > 0
-      ? `your ${items.length} memor${items.length === 1 ? "y" : "ies"}`
+      ? `${items.length} memor${items.length === 1 ? "y" : "ies"}`
       : "your custom instructions";
+
   return [
     {
-      id: "memory-open-import",
-      title: "Open Gemini's memory import",
-      description:
-        "You can skip Gemini's prompt step: PortSmith already has your memories. " +
-        "This option needs a personal Google account and isn't offered in the EEA, Switzerland or the UK.",
-      copyBlocks: [],
+      id: "memory-paste",
+      title: `Add the ${what} Gemini didn't take`,
+      description: [
+        items.length > 0
+          ? `These ${items.length} didn't save one by one. Everything else is already in Gemini.`
+          : "Your custom instructions didn't save on their own.",
+        ...(refusalReasons.length > 0 ? [`Gemini's reason: ${refusalReasons[0]}`] : []),
+        ...(preview.length > 0
+          ? ["", "What's missing:", ...preview, ...(more > 0 ? [`• and ${more} more`] : [])]
+          : []),
+      ].join("\n"),
+      copyBlocks: [{ label: `Missing ${what}`, content: block }],
       actions: [
         {
-          label: "Open Gemini's memory import",
+          label: "Copy, then open Gemini's import page",
           url: GEMINI_IMPORT_URL,
-          note: 'If the page asks, choose "Import memory to Gemini".',
+          note: 'Copy the text above, paste it into "Paste the response here" and click "Add memory". PortSmith already has your memories, so Gemini\'s prompt step can be skipped. Import needs a personal Google account and isn\'t offered in the EEA, Switzerland or the UK.',
         },
       ],
       link: GEMINI_IMPORT_URL,
-    },
-    {
-      id: "memory-paste",
-      title: `Paste ${what}`,
-      description: [
-        'Paste the text below into the text field and click "Add memory".',
-        ...(refusalReasons.length > 0
-          ? ["", "Gemini refused to save these one by one:", ...refusalReasons.map((r) => `• ${r}`)]
-          : []),
-      ].join("\n"),
-      copyBlocks: [{ label: "Memories", content: block }],
       actionHint: 'Paste, then click "Add memory"',
     },
     ...(chatImport ? [chatImport] : []),
   ];
 }
+
+/** First sentence or line of a memory, trimmed for a list. */
+function firstLine(text: string, max = 80): string {
+  const line = text.replace(/\s+/g, " ").trim();
+  const cut = line.length > max ? `${line.slice(0, max - 1).trimEnd()}\u2026` : line;
+  return cut;
+}
+
 
 type SourcePlatform = PlatformIdentifier["platform"];
 
