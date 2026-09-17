@@ -33,7 +33,8 @@ await ctx.route("https://claude.ai/**", async (route) => {
   const url = req.url();
   if (/\/api\/organizations\/[^/]+\/projects$/.test(url) && req.method() === "POST") {
     counts.claudeCreate++;
-    return route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ uuid: `uuid-${counts.claudeCreate}` }) });
+    const uuid = `00000000-0000-4000-8000-${String(counts.claudeCreate).padStart(12, "0")}`;
+    return route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ uuid }) });
   }
   return route.fulfill({ status: 200, contentType: "text/html", body: PAGE });
 });
@@ -53,7 +54,8 @@ await ctx.route("https://gemini.google.com/**", async (route) => {
   return route.fulfill({ status: 200, contentType: "text/html", body: `<!doctype html><html><body><script>window.WIZ_global_data={"SNlM0e":"tok","cfb2h":"bl","FdrFJe":"sid","TuX5cc":"en"};</script>stub</body></html>` });
 });
 
-await ctx.addCookies([{ name: "lastActiveOrg", value: "org-test", domain: "claude.ai", path: "/", secure: true, sameSite: "Lax" }]);
+// The extension only accepts a UUID org ID (v0.4.0)
+await ctx.addCookies([{ name: "lastActiveOrg", value: "11111111-1111-4111-8111-111111111111", domain: "claude.ai", path: "/", secure: true, sameSite: "Lax" }]);
 
 let [sw] = ctx.serviceWorkers();
 if (!sw) sw = await ctx.waitForEvent("serviceworker");
@@ -82,7 +84,7 @@ console.log(logs.filter((l) => l.includes("PortSmith")).join("\n"));
 await ctx.close();
 fs.rmSync(userDataDir, { recursive: true, force: true });
 
-if (counts.claudeCreate !== 1 || counts.geminiCreate !== 1) {
+if (result.claudeResp?.data?.success !== true || counts.claudeCreate !== 1 || counts.geminiCreate !== 1) {
   console.error("FAIL: expected exactly one create request per message", counts);
   process.exit(1);
 }
