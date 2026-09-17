@@ -526,3 +526,118 @@ describe("messaging", () => {
     });
   });
 });
+
+// ─── Regression: duplicate dispatch & stale unsubscribe ──────
+
+describe("messaging router regressions", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockChrome.runtime.lastError = null;
+    _resetHandlers();
+  });
+
+  it("registers a single runtime listener even if initMessageRouter is called twice", () => {
+    // Two content scripts on the same page (e.g. the Claude extractor and
+    // importer) share this module instance. v0.3.0 registered two listeners,
+    // so every message ran its handler twice and created duplicate projects.
+    initMessageRouter();
+    initMessageRouter();
+    expect(mockChrome.runtime.onMessage.addListener).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs a handler exactly once per message after repeated init", async () => {
+    const attached = new Set<unknown>();
+    const listeners: Array<
+      (m: unknown, s: unknown, r: (v: unknown) => void) => boolean
+    > = [];
+    mockChrome.runtime.onMessage.addListener.mockImplementation((fn) => {
+      attached.add(fn);
+      listeners.push(fn);
+    });
+    (mockChrome.runtime.onMessage as unknown as {
+      hasListener: (fn: unknown) => boolean;
+    }).hasListener = (fn: unknown) => attached.has(fn);
+
+    const handler = vi.fn(() => ({ success: true, uuid: "p-1" }));
+    initMessageRouter();
+    onMessage("CLAUDE_CREATE_PROJECT", handler);
+    initMessageRouter();
+
+    const responses: unknown[] = [];
+    for (const listener of listeners) {
+      listener(
+        { __portsmith: true, type: "CLAUDE_CREATE_PROJECT", payload: { name: "A", description: "" } },
+        {},
+        (r) => responses.push(r),
+      );
+    }
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    expect(listeners).toHaveLength(1);
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(responses).toHaveLength(1);
+
+    delete (mockChrome.runtime.onMessage as unknown as { hasListener?: unknown }).hasListener;
+  });
+
+  it("re-attaches when the previous listener is no longer registered", () => {
+    const attached = new Set<unknown>();
+    mockChrome.runtime.onMessage.addListener.mockImplementation((fn) => {
+      attached.add(fn);
+    });
+    (mockChrome.runtime.onMessage as unknown as {
+      hasListener: (fn: unknown) => boolean;
+    }).hasListener = (fn: unknown) => attached.has(fn);
+
+    initMessageRouter();
+    attached.clear(); // e.g. extension context was reloaded
+    initMessageRouter();
+    expect(mockChrome.runtime.onMessage.addListener).toHaveBeenCalledTimes(2);
+
+    delete (mockChrome.runtime.onMessage as unknown as { hasListener?: unknown }).hasListener;
+  });
+
+  it("a stale unsubscribe does not remove a newer handler for the same message", async () => {
+    let listener:
+      | ((m: unknown, s: unknown, r: (v: unknown) => void) => boolean)
+      | undefined;
+    mockChrome.runtime.onMessage.addListener.mockImplementation((fn) => {
+      listener = fn;
+    });
+    initMessageRouter();
+
+    const first = vi.fn();
+    const second = vi.fn();
+    const unsubFirst = onMessage("DOM_EXTRACT_RESULT", first);
+    onMessage("DOM_EXTRACT_RESULT", second); // a later step takes over
+    unsubFirst(); // the earlier step's timeout fires late
+
+    const sendResponse = vi.fn();
+    const handled = listener!(
+      { __portsmith: true, type: "DOM_EXTRACT_RESULT", payload: { type: "memory" } },
+      {},
+      sendResponse,
+    );
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    expect(handled).toBe(true);
+    expect(second).toHaveBeenCalledTimes(1);
+    expect(first).not.toHaveBeenCalled();
+  });
+
+  it("reports the per-message timeout in the timeout error", async () => {
+    vi.useFakeTimers();
+    mockChrome.runtime.sendMessage.mockImplementation(() => {});
+    const promise = sendMessage("STORE_DOWNLOADED_FILE", {
+      fileId: "f",
+      blob: "",
+      mimeType: "text/plain",
+      fileName: "a.txt",
+    });
+    vi.advanceTimersByTime(30_000);
+    await expect(promise).rejects.toThrow("Timed out after 30000ms");
+    vi.useRealTimers();
+  });
+});

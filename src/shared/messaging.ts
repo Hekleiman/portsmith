@@ -401,7 +401,18 @@ export const MESSAGE_TIMEOUT_MS = 10_000;
 const MESSAGE_TIMEOUT_OVERRIDES: Partial<Record<MessageName, number>> = {
   STORE_DOWNLOADED_FILE: 30_000,
   CLAUDE_UPLOAD_FILE: 60_000,
+  // Extraction fans out to one request per project (plus memory and docs),
+  // so it needs far more than the default budget on large accounts.
+  CLAUDE_EXTRACT_PROJECTS: 180_000,
+  GEMINI_EXTRACT_GEMS: 60_000,
+  GEMINI_CREATE_GEM: 60_000,
+  FETCH_GIZMO_API: 30_000,
 };
+
+/** Resolve the timeout used for a given message. */
+export function getMessageTimeout(name: MessageName): number {
+  return MESSAGE_TIMEOUT_OVERRIDES[name] ?? MESSAGE_TIMEOUT_MS;
+}
 
 // ─── Errors ──────────────────────────────────────────────────
 
@@ -416,8 +427,8 @@ export class MessageError extends Error {
 }
 
 export class MessageTimeoutError extends MessageError {
-  constructor(messageName: string) {
-    super(messageName, `Timed out after ${MESSAGE_TIMEOUT_MS}ms`);
+  constructor(messageName: string, timeoutMs: number = MESSAGE_TIMEOUT_MS) {
+    super(messageName, `Timed out after ${timeoutMs}ms`);
     this.name = "MessageTimeoutError";
   }
 }
@@ -479,9 +490,6 @@ async function injectContentScript(tabId: number): Promise<void> {
   });
 }
 
-/** Tracks tabs where we already attempted programmatic injection. */
-const injectedTabs = new Set<number>();
-
 // ─── Send ────────────────────────────────────────────────────
 
 export function sendMessage<K extends MessageName>(
@@ -491,9 +499,9 @@ export function sendMessage<K extends MessageName>(
     : [MessageMap[K]["request"]]
 ): Promise<MessageMap[K]["response"]> {
   return new Promise<MessageMap[K]["response"]>((resolve, reject) => {
-    const timeoutMs = MESSAGE_TIMEOUT_OVERRIDES[name] ?? MESSAGE_TIMEOUT_MS;
+    const timeoutMs = getMessageTimeout(name);
     const timer = setTimeout(() => {
-      reject(new MessageTimeoutError(String(name)));
+      reject(new MessageTimeoutError(String(name), timeoutMs));
     }, timeoutMs);
 
     const envelope: MessageEnvelope = {
@@ -537,9 +545,9 @@ export function sendTabMessage<K extends MessageName>(
     : [MessageMap[K]["request"]]
 ): Promise<MessageMap[K]["response"]> {
   return new Promise<MessageMap[K]["response"]>((resolve, reject) => {
-    const timeoutMs = MESSAGE_TIMEOUT_OVERRIDES[name] ?? MESSAGE_TIMEOUT_MS;
+    const timeoutMs = getMessageTimeout(name);
     const timer = setTimeout(() => {
-      reject(new MessageTimeoutError(String(name)));
+      reject(new MessageTimeoutError(String(name), timeoutMs));
     }, timeoutMs);
 
     const envelope: MessageEnvelope = {
@@ -608,14 +616,11 @@ export function safeSendTabMessage<K extends MessageName>(
         throw err;
       }
 
-      // After a navigation (e.g. bfcache eviction), the old content script
-      // is gone. Clear the injection guard so we can re-inject.
-      injectedTabs.delete(tabId);
-
+      // After an extension reload or a bfcache eviction the old content
+      // script is gone, so inject a fresh copy and retry once.
       console.log(
         `[PortSmith] Content script not found in tab ${tabId}, injecting programmatically...`,
       );
-      injectedTabs.add(tabId);
       await injectContentScript(tabId);
       await new Promise<void>((r) => setTimeout(r, 500));
 
@@ -642,21 +647,51 @@ export function onMessage<K extends MessageName>(
   name: K,
   handler: MessageHandler<K>,
 ): () => void {
-  handlers.set(name, handler as InternalHandler);
+  const internal = handler as InternalHandler;
+  handlers.set(name, internal);
   return () => {
-    handlers.delete(name);
+    // Only remove the handler this call registered. A stale unsubscribe
+    // (e.g. a timeout firing after a newer handler took over the same
+    // message name) must not delete someone else's handler.
+    if (handlers.get(name) === internal) {
+      handlers.delete(name);
+    }
   };
 }
 
 /** @internal — for testing only */
 export function _resetHandlers(): void {
   handlers.clear();
+  routerListener = null;
 }
 
 // ─── Router ──────────────────────────────────────────────────
 
+type RuntimeListener = Parameters<
+  typeof chrome.runtime.onMessage.addListener
+>[0];
+
+let routerListener: RuntimeListener | null = null;
+
+/**
+ * Install the single `chrome.runtime.onMessage` listener for this JS realm.
+ *
+ * Idempotent: content scripts that share an isolated world (e.g. the Claude
+ * extractor and importer, or the Gemini extractor and importer) also share
+ * this module instance and its handler map. Registering a second listener
+ * would dispatch every message to the same handler twice, which created
+ * duplicate projects and Gems in v0.3.0.
+ */
 export function initMessageRouter(): void {
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (routerListener) {
+    const stillAttached =
+      typeof chrome.runtime.onMessage.hasListener === "function"
+        ? chrome.runtime.onMessage.hasListener(routerListener)
+        : true;
+    if (stillAttached) return;
+  }
+
+  const listener: RuntimeListener = (message, sender, sendResponse) => {
     if (!isMessageEnvelope(message)) return false;
 
     const handler = handlers.get(message.type);
@@ -674,5 +709,8 @@ export function initMessageRouter(): void {
 
     // Keep message channel open for async sendResponse
     return true;
-  });
+  };
+
+  routerListener = listener;
+  chrome.runtime.onMessage.addListener(listener);
 }
