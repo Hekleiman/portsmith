@@ -23,6 +23,7 @@ import type {
   GizmoAPIResponse,
 } from "@/shared/messaging";
 import { normalizeGizmoId } from "@/shared/chatgpt-ids";
+import { listProjectSummaries } from "./api";
 import type {
   ExtractedCustomGPT,
   ExtractedChatGPTProject,
@@ -36,6 +37,9 @@ import type {
 } from "@/core/adapters/chatgpt-dom-types";
 
 // ─── Constants ───────────────────────────────────────────────
+
+// Debug probe for the internal API wrapper. Keep false in committed code.
+const DEBUG = false;
 
 const PAGE_LOAD_TIMEOUT_MS = 5000;
 const ELEMENT_WAIT_TIMEOUT_MS = 3000;
@@ -1122,6 +1126,24 @@ function init(): void {
   onMessage("EXTRACT_PROJECT_PAGE", async () => {
       return extractProjectPage();
   });
+
+  if (DEBUG) {
+    // Names and count only: never the token, never a raw response.
+    listProjectSummaries()
+      .then((summaries) => {
+        console.log(
+          "[PortSmith] chatgpt projects:",
+          summaries.length,
+          summaries.map((s) => s.name),
+        );
+      })
+      .catch((e: unknown) => {
+        console.log(
+          "[PortSmith] chatgpt projects probe failed:",
+          e instanceof Error ? e.message : String(e),
+        );
+      });
+  }
 
   // Notify service worker of current page state
   sendMessage("PAGE_STATE", {
