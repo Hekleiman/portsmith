@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "PortSmith",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Move your AI setup between ChatGPT, Claude and Gemini: projects, GPTs, Gems, files and memory. Private and in-browser.",
   "minimum_chrome_version": "116",
   "icons": {

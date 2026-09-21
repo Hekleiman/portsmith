@@ -6,3 +6,10 @@ dist/
 *.zip
 *.pem
 .playwright-profile/
+
+# Agent tooling and scratch
+.claude/
+Claude outputs/
+
+# Packed builds (dist.crx is still tracked; git rm --cached it)
+*.crx

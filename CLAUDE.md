@@ -122,6 +122,9 @@ portsmith/
 - Branch per feature: `feat/chatgpt-extractor`, `feat/side-panel-wizard`, etc.
 - Commit after each completed task with descriptive message
 - Never commit `node_modules/`, `.env`, or IndexedDB dumps
+- From a Cowork session (device_bash), always use `git --no-optional-locks status`. Plain
+  `git status` writes `.git/index.lock` and the sandbox cannot unlink it, leaving a stale
+  lock that blocks the next commit. This has cost time twice.
 
 ---
 
