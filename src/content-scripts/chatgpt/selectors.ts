@@ -239,8 +239,15 @@ export const GPT_LIST = {
 // Used by: extractor.ts → extractProjects()
 
 export const PROJECT_SIDEBAR = {
-  /** Project links in the sidebar. Each is a nav <a> whose href ends with /project.
-   *  Example: /g/g-p-68fbd0de40248191a303c2a93435081a-japan-china-korea-trip/project */
+  /** DEAD as of 2026-09-20: resolves zero elements on every page.
+   *  ChatGPT stopped rendering sidebar projects as anchors. They are now
+   *  <button aria-label="Open project home"> with no href, and no anchor
+   *  anywhere on the page contains a g-p- ID, so no selector change can
+   *  bring these back. Discovery reads listProjectSummaries() instead.
+   *  Kept for reference and for the checkLoggedIn() DOM fallback.
+   *
+   *  Was: project links in the sidebar, each a nav <a> whose href ends
+   *  with /project, e.g. /g/g-p-<32 hex>-japan-china-korea-trip/project */
   projectLinks: [
     {
       priority: 1,

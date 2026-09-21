@@ -24,6 +24,7 @@ import type {
 } from "@/shared/messaging";
 import { normalizeGizmoId } from "@/shared/chatgpt-ids";
 import { getAccessToken, listProjectSummaries } from "./api";
+import type { ChatGPTProjectSummary } from "./api";
 import type {
   ExtractedCustomGPT,
   ExtractedChatGPTProject,
@@ -813,24 +814,35 @@ export async function extractProjects(): Promise<ProjectExtractionResult> {
 
   const projects: ExtractedChatGPTProject[] = [];
 
-  // Discover projects from the sidebar
-  const sidebarLinks = resolveAllElements(PROJECT_SIDEBAR.projectLinks);
-  console.log("[PortSmith] extractProjects sidebarLinks count:", sidebarLinks.length);
-  if (sidebarLinks.length === 0) {
-    warn(warnings, "Projects", "No project links found in the sidebar. The sidebar may be collapsed, or there are no projects.");
+  // Discovery reads the signed-in account, not the sidebar. As of
+  // 2026-09-20 ChatGPT renders projects as buttons with no href, and no
+  // gizmo ID survives anywhere in the DOM, so there is deliberately no
+  // DOM fallback here: it could only ever return unusable results.
+  let summaries: ChatGPTProjectSummary[];
+  try {
+    summaries = await listProjectSummaries();
+  } catch (e: unknown) {
+    warn(
+      warnings,
+      "Projects",
+      `Could not read the project list from ChatGPT: ${
+        e instanceof Error ? e.message : String(e)
+      }`,
+    );
+    return { success: false, projects: [], warnings };
+  }
+
+  console.log("[PortSmith] extractProjects discovered:", summaries.length);
+  if (summaries.length === 0) {
+    warn(warnings, "Projects", "This ChatGPT account has no projects.");
   }
 
   // Extract each project via the gizmo API (no navigation needed)
   const seen = new Set<string>();
-  for (const link of sidebarLinks) {
-    const href = link.getAttribute("href") ?? "";
-    // Accept any gizmo ID format (g-p-xxx, g-xxx, etc.) without the slug
-    const idMatch = href.match(/\/g\/([^/]+)\/project/);
-    const gizmoId = idMatch?.[1] ? normalizeGizmoId(idMatch[1]) : null;
-    if (!gizmoId || seen.has(gizmoId)) continue;
+  for (const { gizmoId, name } of summaries) {
+    if (seen.has(gizmoId)) continue;
     seen.add(gizmoId);
 
-    const name = link.textContent?.trim() ?? "Unknown Project";
     const project = await extractSingleProject(warnings, gizmoId, name);
     if (project) projects.push(project);
   }
@@ -939,33 +951,34 @@ export async function extractCustomInstructions(): Promise<CustomInstructionsExt
 // ─── Sidebar Scanning ───────────────────────────────────────
 
 /**
- * Scan the ChatGPT sidebar for project and GPT links.
- * Works on any chatgpt.com page where the sidebar is visible.
- * Synchronous — reads currently visible DOM only.
+ * Find the account's projects, and scan the sidebar for GPT links.
+ * Projects come from the API, so they are found whether or not the
+ * sidebar is open. GPTs are still read from the DOM.
  */
-export function scanSidebar(): SidebarScanResult {
+export async function scanSidebar(): Promise<SidebarScanResult> {
   const projects: SidebarScanResult["projects"] = [];
   const gpts: SidebarScanResult["gpts"] = [];
 
-  // Projects: sidebar <a> elements whose href ends with /project
-  // Example href: /g/g-p-68fbd0de40248191a303c2a93435081a-japan-china-korea-trip/project
-  const projectLinks = resolveAllElements(PROJECT_SIDEBAR.projectLinks);
-  console.log(
-    `[PortSmith] scanSidebar: ${projectLinks.length} project links found`,
-  );
-  const seenProjects = new Set<string>();
-  for (const link of projectLinks) {
-    const href = link.getAttribute("href") ?? "";
-    // Extract gizmo ID from /g/<id>/project and drop the readable slug
-    const idMatch = href.match(/\/g\/([^/]+)\/project/);
-    const id = idMatch?.[1] ? normalizeGizmoId(idMatch[1]) : null;
-    if (!id || seenProjects.has(id)) continue;
-    seenProjects.add(id);
-
-    const name = link.textContent?.trim() ?? "Unknown Project";
-    const url = href.startsWith("http") ? href : `https://chatgpt.com${href}`;
-
-    projects.push({ id, name, url });
+  // Projects: from the signed-in account. The sidebar stopped carrying
+  // project links on 2026-09-20 (see PROJECT_SIDEBAR.projectLinks).
+  try {
+    const summaries = await listProjectSummaries();
+    const seenProjects = new Set<string>();
+    for (const { gizmoId, name } of summaries) {
+      if (seenProjects.has(gizmoId)) continue;
+      seenProjects.add(gizmoId);
+      projects.push({
+        id: gizmoId,
+        name,
+        url: `https://chatgpt.com/g/${gizmoId}/project`,
+      });
+    }
+    console.log(`[PortSmith] scanSidebar: ${projects.length} projects found`);
+  } catch (e: unknown) {
+    console.log(
+      "[PortSmith] scanSidebar: could not read the project list:",
+      e instanceof Error ? e.message : String(e),
+    );
   }
 
   // GPTs: sidebar <a> elements with href /g/g-<id> (excluding projects)
@@ -1003,12 +1016,12 @@ export function scanSidebar(): SidebarScanResult {
 /**
  * Inspect the current page DOM and return a structured report.
  * Used for debugging and as a readiness probe after navigation.
- * Synchronous — fast enough for polling.
+ * Async since the project count now comes from the API.
  */
-export function inspectDOM(): DOMInspectionReport {
+export async function inspectDOM(): Promise<DOMInspectionReport> {
   const page = detectPage();
   const loginResult = resolveSelector(LOGIN_AVATAR);
-  const sidebar = scanSidebar();
+  const sidebar = await scanSidebar();
 
   return {
     url: window.location.href,
@@ -1122,7 +1135,7 @@ function init(): void {
     return { success: true };
   });
 
-  onMessage("DOM_INSPECT", () => {
+  onMessage("DOM_INSPECT", async () => {
     return inspectDOM();
   });
 
@@ -1130,7 +1143,7 @@ function init(): void {
     return { pong: true as const };
   });
 
-  onMessage("SCAN_SIDEBAR", () => {
+  onMessage("SCAN_SIDEBAR", async () => {
     return scanSidebar();
   });
 
