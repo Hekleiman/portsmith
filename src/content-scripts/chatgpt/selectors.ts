@@ -9,22 +9,26 @@ import type { SelectorStrategy } from "@/content-scripts/common/selector-engine"
 // the strategies and bump lastVerified.
 
 const VERIFIED = "2026-02-28";
+// Re-checked live on a signed-in chatgpt.com tab.
+const VERIFIED_0920 = "2026-09-20";
 
 // ─── Login Detection ────────────────────────────────────────
 // Used by: extractor.ts → checkLoggedIn()
 
 export const LOGIN_AVATAR: SelectorStrategy[] = [
   {
+    // Renamed from "profile-button" sometime before 2026-09-20.
     priority: 1,
     type: "testid",
-    value: "profile-button",
-    lastVerified: VERIFIED,
+    value: "accounts-profile-button",
+    lastVerified: VERIFIED_0920,
   },
   {
     priority: 2,
     type: "css",
-    value: "[data-testid='profile-button'], button[aria-label='Open Profile Menu']",
-    lastVerified: VERIFIED,
+    value:
+      "[data-testid='accounts-profile-button'], [data-testid='profile-button'], button[aria-label='Open Profile Menu']",
+    lastVerified: VERIFIED_0920,
   },
   {
     priority: 3,
@@ -186,9 +190,15 @@ export const GPT_EDITOR = {
 // navigating into each editor page.
 
 export const GPT_LIST = {
-  /** GPT links in the sidebar. Each is a nav <a> with href /g/g-<id>.
-   *  Excludes project links (href ending in /project).
-   *  Example: /g/g-1Z8uzeu5R-resume-wizard */
+  /** DEAD as of 2026-09-20: resolves zero elements, for the same reason
+   *  as PROJECT_SIDEBAR.projectLinks. The sidebar renders no /g/ anchors
+   *  at all any more, so there is no gizmo ID in the DOM to read.
+   *  Discovery reads listGptSummaries() instead, which also returns each
+   *  GPT's full config and removes the old editor-page navigation.
+   *  Kept for reference and for the checkLoggedIn() DOM fallback.
+   *
+   *  Was: GPT links in the sidebar, each a nav <a> with href /g/g-<id>,
+   *  excluding project links, e.g. /g/g-1Z8uzeu5R-resume-wizard */
   gptCards: [
     {
       priority: 1,
@@ -235,8 +245,15 @@ export const GPT_LIST = {
 // Used by: extractor.ts → extractProjects()
 
 export const PROJECT_SIDEBAR = {
-  /** Project links in the sidebar. Each is a nav <a> whose href ends with /project.
-   *  Example: /g/g-p-68fbd0de40248191a303c2a93435081a-japan-china-korea-trip/project */
+  /** DEAD as of 2026-09-20: resolves zero elements on every page.
+   *  ChatGPT stopped rendering sidebar projects as anchors. They are now
+   *  <button aria-label="Open project home"> with no href, and no anchor
+   *  anywhere on the page contains a g-p- ID, so no selector change can
+   *  bring these back. Discovery reads listProjectSummaries() instead.
+   *  Kept for reference and for the checkLoggedIn() DOM fallback.
+   *
+   *  Was: project links in the sidebar, each a nav <a> whose href ends
+   *  with /project, e.g. /g/g-p-<32 hex>-japan-china-korea-trip/project */
   projectLinks: [
     {
       priority: 1,

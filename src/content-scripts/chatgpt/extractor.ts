@@ -23,6 +23,8 @@ import type {
   GizmoAPIResponse,
 } from "@/shared/messaging";
 import { normalizeGizmoId } from "@/shared/chatgpt-ids";
+import { getAccessToken, listGptSummaries, listProjectSummaries } from "./api";
+import type { ChatGPTGptSummary, ChatGPTProjectSummary } from "./api";
 import type {
   ExtractedCustomGPT,
   ExtractedChatGPTProject,
@@ -36,6 +38,9 @@ import type {
 } from "@/core/adapters/chatgpt-dom-types";
 
 // ─── Constants ───────────────────────────────────────────────
+
+// Debug probe for the internal API wrapper. Keep false in committed code.
+const DEBUG = false;
 
 const PAGE_LOAD_TIMEOUT_MS = 5000;
 const ELEMENT_WAIT_TIMEOUT_MS = 3000;
@@ -154,7 +159,18 @@ function resolveAllElements(
 // ─── Login Check ────────────────────────────────────────────
 
 async function checkLoggedIn(): Promise<boolean> {
-  // Primary: look for the profile/avatar button
+  // Primary: the session endpoint, which is what the API itself checks.
+  // The sidebar DOM is not a reliable signal here: on 2026-09-20 a
+  // signed-in account had no profile-button testid under its old name,
+  // one anchor in its <nav>, and no project links at all.
+  try {
+    await getAccessToken();
+    return true;
+  } catch {
+    // Signed out, or the session endpoint moved. Fall back to the DOM.
+  }
+
+  // Fallback: look for the profile/avatar button
   const result = await waitForSelector(LOGIN_AVATAR, PAGE_LOAD_TIMEOUT_MS);
   if (result.success) return true;
 
@@ -242,8 +258,9 @@ async function extractSingleGPT(
 }
 
 /**
- * Extract Custom GPT configs. When on the editor page, extracts the current GPT.
- * When on the list page, discovers GPT links (extraction of each requires navigation).
+ * Extract Custom GPT configs from the signed-in account. One API call
+ * returns every owned GPT with its full setup, so no navigation to each
+ * GPT's editor page is needed, and this works from any chatgpt.com page.
  */
 export async function extractCustomGPTs(): Promise<CustomGPTExtractionResult> {
   const warnings: ExtractionWarning[] = [];
@@ -257,42 +274,66 @@ export async function extractCustomGPTs(): Promise<CustomGPTExtractionResult> {
     };
   }
 
-  const page = detectPage();
+  // Discovery reads the account, not the DOM. The sidebar stopped carrying
+  // /g/ anchors on 2026-09-20 and no gizmo ID survives in the page, so
+  // there is deliberately no DOM fallback for discovery.
+  let summaries: ChatGPTGptSummary[];
+  try {
+    summaries = await listGptSummaries();
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+
+    // The one page that can still answer for itself is a GPT's own editor.
+    if (detectPage() === "gpt_editor") {
+      warn(
+        warnings,
+        "Custom GPTs",
+        `Could not read the GPT list from ChatGPT (${message}); reading this editor page instead`,
+      );
+      const gpt = await extractSingleGPT(warnings);
+      const gpts = gpt ? [gpt] : [];
+      return { success: gpts.length > 0, gpts, warnings };
+    }
+
+    warn(
+      warnings,
+      "Custom GPTs",
+      `Could not read the GPT list from ChatGPT: ${message}`,
+    );
+    return { success: false, gpts: [], warnings };
+  }
+
+  console.log("[PortSmith] extractCustomGPTs discovered:", summaries.length);
+
   const gpts: ExtractedCustomGPT[] = [];
+  const seen = new Set<string>();
+  for (const summary of summaries) {
+    if (seen.has(summary.gizmoId)) continue;
+    seen.add(summary.gizmoId);
 
-  if (page === "gpt_editor") {
-    const gpt = await extractSingleGPT(warnings);
-    if (gpt) gpts.push(gpt);
-  } else if (page === "gpt_list") {
-    // On the list page, we can discover GPT IDs but can't read their full config
-    // without navigating to each editor page. Return the IDs as partial results.
-    const cards = resolveAllElements(GPT_LIST.gptCards);
-    if (cards.length === 0) {
-      warn(warnings, "GPT list", "No GPT cards found. The page may not be loaded yet.");
+    gpts.push({
+      id: summary.gizmoId,
+      name: summary.name,
+      description: summary.description,
+      instructions: summary.instructions,
+      conversationStarters: summary.conversationStarters,
+      knowledgeFileNames: summary.knowledgeFileNames,
+    });
+
+    // Say which fields came back empty, rather than sending the user to a page.
+    const missing: string[] = [];
+    if (!summary.instructions) missing.push("instructions");
+    if (!summary.description) missing.push("description");
+    if (summary.conversationStarters.length === 0) {
+      missing.push("conversation starters");
     }
-    for (const card of cards) {
-      const href = card.getAttribute("href") ?? "";
-      const idMatch = href.match(/\/gpts\/editor\/([^/?]+)/);
-      const id = idMatch?.[1] ?? "";
-
-      // Try to read the name from inside the card
-      const nameEl = card.querySelector("h3, [class*='title']");
-      const name = nameEl?.textContent?.trim() ?? "Unknown GPT";
-
-      if (id) {
-        gpts.push({
-          id,
-          name,
-          description: "",
-          instructions: "",
-          conversationStarters: [],
-          knowledgeFileNames: [],
-        });
-        warn(warnings, `GPT ${name}`, "Only the name and description were read from the list. Open the GPT's editor to read its full setup.");
-      }
+    if (missing.length > 0) {
+      warn(
+        warnings,
+        `GPT "${summary.name}"`,
+        `ChatGPT returned no ${missing.join(", ")} for this GPT. Everything else was read.`,
+      );
     }
-  } else {
-    warn(warnings, "GPT extraction", `Wrong page for GPT extraction (detected: ${page}). Navigate to chatgpt.com/gpts/mine or a GPT editor page.`);
   }
 
   return { success: gpts.length > 0 || warnings.length === 0, gpts, warnings };
@@ -798,24 +839,35 @@ export async function extractProjects(): Promise<ProjectExtractionResult> {
 
   const projects: ExtractedChatGPTProject[] = [];
 
-  // Discover projects from the sidebar
-  const sidebarLinks = resolveAllElements(PROJECT_SIDEBAR.projectLinks);
-  console.log("[PortSmith] extractProjects sidebarLinks count:", sidebarLinks.length);
-  if (sidebarLinks.length === 0) {
-    warn(warnings, "Projects", "No project links found in the sidebar. The sidebar may be collapsed, or there are no projects.");
+  // Discovery reads the signed-in account, not the sidebar. As of
+  // 2026-09-20 ChatGPT renders projects as buttons with no href, and no
+  // gizmo ID survives anywhere in the DOM, so there is deliberately no
+  // DOM fallback here: it could only ever return unusable results.
+  let summaries: ChatGPTProjectSummary[];
+  try {
+    summaries = await listProjectSummaries();
+  } catch (e: unknown) {
+    warn(
+      warnings,
+      "Projects",
+      `Could not read the project list from ChatGPT: ${
+        e instanceof Error ? e.message : String(e)
+      }`,
+    );
+    return { success: false, projects: [], warnings };
+  }
+
+  console.log("[PortSmith] extractProjects discovered:", summaries.length);
+  if (summaries.length === 0) {
+    warn(warnings, "Projects", "This ChatGPT account has no projects.");
   }
 
   // Extract each project via the gizmo API (no navigation needed)
   const seen = new Set<string>();
-  for (const link of sidebarLinks) {
-    const href = link.getAttribute("href") ?? "";
-    // Accept any gizmo ID format (g-p-xxx, g-xxx, etc.) without the slug
-    const idMatch = href.match(/\/g\/([^/]+)\/project/);
-    const gizmoId = idMatch?.[1] ? normalizeGizmoId(idMatch[1]) : null;
-    if (!gizmoId || seen.has(gizmoId)) continue;
+  for (const { gizmoId, name } of summaries) {
+    if (seen.has(gizmoId)) continue;
     seen.add(gizmoId);
 
-    const name = link.textContent?.trim() ?? "Unknown Project";
     const project = await extractSingleProject(warnings, gizmoId, name);
     if (project) projects.push(project);
   }
@@ -924,60 +976,56 @@ export async function extractCustomInstructions(): Promise<CustomInstructionsExt
 // ─── Sidebar Scanning ───────────────────────────────────────
 
 /**
- * Scan the ChatGPT sidebar for project and GPT links.
- * Works on any chatgpt.com page where the sidebar is visible.
- * Synchronous — reads currently visible DOM only.
+ * Find the account's projects and custom GPTs. Both come from the API,
+ * so they are found whether or not the sidebar is open. The name is kept
+ * because it is the SCAN_SIDEBAR message's handler.
  */
-export function scanSidebar(): SidebarScanResult {
+export async function scanSidebar(): Promise<SidebarScanResult> {
   const projects: SidebarScanResult["projects"] = [];
   const gpts: SidebarScanResult["gpts"] = [];
 
-  // Projects: sidebar <a> elements whose href ends with /project
-  // Example href: /g/g-p-68fbd0de40248191a303c2a93435081a-japan-china-korea-trip/project
-  const projectLinks = resolveAllElements(PROJECT_SIDEBAR.projectLinks);
-  console.log(
-    `[PortSmith] scanSidebar: ${projectLinks.length} project links found`,
-  );
-  const seenProjects = new Set<string>();
-  for (const link of projectLinks) {
-    const href = link.getAttribute("href") ?? "";
-    // Extract gizmo ID from /g/<id>/project and drop the readable slug
-    const idMatch = href.match(/\/g\/([^/]+)\/project/);
-    const id = idMatch?.[1] ? normalizeGizmoId(idMatch[1]) : null;
-    if (!id || seenProjects.has(id)) continue;
-    seenProjects.add(id);
-
-    const name = link.textContent?.trim() ?? "Unknown Project";
-    const url = href.startsWith("http") ? href : `https://chatgpt.com${href}`;
-
-    projects.push({ id, name, url });
+  // Projects: from the signed-in account. The sidebar stopped carrying
+  // project links on 2026-09-20 (see PROJECT_SIDEBAR.projectLinks).
+  try {
+    const summaries = await listProjectSummaries();
+    const seenProjects = new Set<string>();
+    for (const { gizmoId, name } of summaries) {
+      if (seenProjects.has(gizmoId)) continue;
+      seenProjects.add(gizmoId);
+      projects.push({
+        id: gizmoId,
+        name,
+        url: `https://chatgpt.com/g/${gizmoId}/project`,
+      });
+    }
+    console.log(`[PortSmith] scanSidebar: ${projects.length} projects found`);
+  } catch (e: unknown) {
+    console.log(
+      "[PortSmith] scanSidebar: could not read the project list:",
+      e instanceof Error ? e.message : String(e),
+    );
   }
 
-  // GPTs: sidebar <a> elements with href /g/g-<id> (excluding projects)
-  // Example href: /g/g-1Z8uzeu5R-resume-wizard
-  const gptLinks = resolveAllElements(GPT_LIST.gptCards);
-  console.log(
-    `[PortSmith] scanSidebar: ${gptLinks.length} GPT links found`,
-  );
-  const seenGpts = new Set<string>();
-  for (const link of gptLinks) {
-    const href = link.getAttribute("href") ?? "";
-    // Project pages and chats inside projects/GPTs also live under /g/;
-    // they are not GPT entries.
-    if (/\/g\/g-p-/.test(href) || /\/c\//.test(href)) continue;
-    // Extract GPT ID (g-xxx) from /g/<id>
-    // Also handle legacy /gpts/editor/<id> URLs
-    const sidebarMatch = href.match(/\/g\/(g-[^/]+)/);
-    const editorMatch = href.match(/\/gpts\/editor\/([^/?]+)/);
-    const raw = sidebarMatch?.[1] ?? editorMatch?.[1] ?? "";
-    const id = raw ? normalizeGizmoId(raw) : null;
-    if (!id || seenGpts.has(id)) continue;
-    seenGpts.add(id);
-
-    const name = link.textContent?.trim() ?? "Unknown GPT";
-    const url = href.startsWith("http") ? href : `https://chatgpt.com${href}`;
-
-    gpts.push({ id, name, url });
+  // GPTs: from the signed-in account, for the same reason as projects.
+  // The sidebar no longer renders /g/ anchors (see GPT_LIST.gptCards).
+  try {
+    const summaries = await listGptSummaries();
+    const seenGpts = new Set<string>();
+    for (const { gizmoId, name } of summaries) {
+      if (seenGpts.has(gizmoId)) continue;
+      seenGpts.add(gizmoId);
+      gpts.push({
+        id: gizmoId,
+        name,
+        url: `https://chatgpt.com/g/${gizmoId}`,
+      });
+    }
+    console.log(`[PortSmith] scanSidebar: ${gpts.length} GPTs found`);
+  } catch (e: unknown) {
+    console.log(
+      "[PortSmith] scanSidebar: could not read the GPT list:",
+      e instanceof Error ? e.message : String(e),
+    );
   }
 
   return { projects, gpts };
@@ -988,12 +1036,12 @@ export function scanSidebar(): SidebarScanResult {
 /**
  * Inspect the current page DOM and return a structured report.
  * Used for debugging and as a readiness probe after navigation.
- * Synchronous — fast enough for polling.
+ * Async since the project count now comes from the API.
  */
-export function inspectDOM(): DOMInspectionReport {
+export async function inspectDOM(): Promise<DOMInspectionReport> {
   const page = detectPage();
   const loginResult = resolveSelector(LOGIN_AVATAR);
-  const sidebar = scanSidebar();
+  const sidebar = await scanSidebar();
 
   return {
     url: window.location.href,
@@ -1107,7 +1155,7 @@ function init(): void {
     return { success: true };
   });
 
-  onMessage("DOM_INSPECT", () => {
+  onMessage("DOM_INSPECT", async () => {
     return inspectDOM();
   });
 
@@ -1115,13 +1163,31 @@ function init(): void {
     return { pong: true as const };
   });
 
-  onMessage("SCAN_SIDEBAR", () => {
+  onMessage("SCAN_SIDEBAR", async () => {
     return scanSidebar();
   });
 
   onMessage("EXTRACT_PROJECT_PAGE", async () => {
       return extractProjectPage();
   });
+
+  if (DEBUG) {
+    // Names and count only: never the token, never a raw response.
+    listProjectSummaries()
+      .then((summaries) => {
+        console.log(
+          "[PortSmith] chatgpt projects:",
+          summaries.length,
+          summaries.map((s) => s.name),
+        );
+      })
+      .catch((e: unknown) => {
+        console.log(
+          "[PortSmith] chatgpt projects probe failed:",
+          e instanceof Error ? e.message : String(e),
+        );
+      });
+  }
 
   // Notify service worker of current page state
   sendMessage("PAGE_STATE", {

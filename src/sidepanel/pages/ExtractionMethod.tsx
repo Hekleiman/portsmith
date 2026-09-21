@@ -13,7 +13,7 @@ const METHODS: {
     id: "browser",
     title: "Read from your ChatGPT account",
     description:
-      "Reads your projects, custom GPTs, files, memory and custom instructions from ChatGPT in this browser. Keep the ChatGPT sidebar open.",
+      "Reads your projects, custom GPTs, files, memory and custom instructions from ChatGPT in this browser. Projects come straight from your account, so you only need to be logged in to chatgpt.com.",
     badge: "Recommended",
     icon: (
       <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-sky-100">

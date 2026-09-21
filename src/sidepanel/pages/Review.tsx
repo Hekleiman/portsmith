@@ -183,7 +183,7 @@ export default function Review(): React.JSX.Element {
         </h2>
         <p className="mt-1 text-sm text-gray-600">
           {manifest?.source.platform === "chatgpt"
-            ? "No projects or custom GPTs were found. Keep the ChatGPT sidebar open (with your projects visible) and choose \"Read from browser\"; a backup file on its own doesn't include GPT or project settings."
+            ? "No projects or custom GPTs were found. Projects are read directly from your signed-in ChatGPT account, so all that's needed is a chatgpt.com tab you're logged in to; choose \"Read from browser\", because a backup file on its own doesn't include GPT or project settings."
             : `No ${manifest?.source.platform === "gemini" ? "Gems" : "projects"} were found in your ${platformLabel(manifest?.source.platform)} account.`}
         </p>
         {(manifest?.metadata.extractionWarnings?.length ?? 0) > 0 && (
