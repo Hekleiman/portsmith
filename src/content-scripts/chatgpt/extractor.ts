@@ -23,7 +23,7 @@ import type {
   GizmoAPIResponse,
 } from "@/shared/messaging";
 import { normalizeGizmoId } from "@/shared/chatgpt-ids";
-import { listProjectSummaries } from "./api";
+import { getAccessToken, listProjectSummaries } from "./api";
 import type {
   ExtractedCustomGPT,
   ExtractedChatGPTProject,
@@ -158,7 +158,18 @@ function resolveAllElements(
 // ─── Login Check ────────────────────────────────────────────
 
 async function checkLoggedIn(): Promise<boolean> {
-  // Primary: look for the profile/avatar button
+  // Primary: the session endpoint, which is what the API itself checks.
+  // The sidebar DOM is not a reliable signal here: on 2026-09-20 a
+  // signed-in account had no profile-button testid under its old name,
+  // one anchor in its <nav>, and no project links at all.
+  try {
+    await getAccessToken();
+    return true;
+  } catch {
+    // Signed out, or the session endpoint moved. Fall back to the DOM.
+  }
+
+  // Fallback: look for the profile/avatar button
   const result = await waitForSelector(LOGIN_AVATAR, PAGE_LOAD_TIMEOUT_MS);
   if (result.success) return true;
 

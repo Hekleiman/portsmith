@@ -9,22 +9,26 @@ import type { SelectorStrategy } from "@/content-scripts/common/selector-engine"
 // the strategies and bump lastVerified.
 
 const VERIFIED = "2026-02-28";
+// Re-checked live on a signed-in chatgpt.com tab.
+const VERIFIED_0920 = "2026-09-20";
 
 // ─── Login Detection ────────────────────────────────────────
 // Used by: extractor.ts → checkLoggedIn()
 
 export const LOGIN_AVATAR: SelectorStrategy[] = [
   {
+    // Renamed from "profile-button" sometime before 2026-09-20.
     priority: 1,
     type: "testid",
-    value: "profile-button",
-    lastVerified: VERIFIED,
+    value: "accounts-profile-button",
+    lastVerified: VERIFIED_0920,
   },
   {
     priority: 2,
     type: "css",
-    value: "[data-testid='profile-button'], button[aria-label='Open Profile Menu']",
-    lastVerified: VERIFIED,
+    value:
+      "[data-testid='accounts-profile-button'], [data-testid='profile-button'], button[aria-label='Open Profile Menu']",
+    lastVerified: VERIFIED_0920,
   },
   {
     priority: 3,
