@@ -36,9 +36,11 @@
 
 const SESSION_PATH = "/api/auth/session";
 const SIDEBAR_PATH = "/backend-api/gizmos/snorlax/sidebar";
+const MINE_PATH = "/backend-api/gizmos/mine";
 
 /** Projects are `g-p-<32 hex>`; plain GPTs are `g-<9 chars>`. */
 const PROJECT_GIZMO_ID = /^g-p-[0-9a-f]{32}$/;
+const GPT_GIZMO_ID = /^g-[A-Za-z0-9]{9}$/;
 
 /**
  * Cache lifetime for the bearer token. Far shorter than the token's own
@@ -49,6 +51,7 @@ const TOKEN_TTL_MS = 5 * 60 * 1000;
 
 const SIDEBAR_PAGE_SIZE = 20;
 const MAX_SIDEBAR_PAGES = 50;
+const MAX_GPT_PAGES = 50;
 
 export class ChatGPTApiError extends Error {
   public readonly status: number;
@@ -268,6 +271,135 @@ export async function listProjectSummaries(): Promise<ChatGPTProjectSummary[]> {
   }
 
   return projects;
+}
+
+// ─── Custom GPTs ────────────────────────────────────────────
+
+/** Whether a gizmo ID is a custom GPT, as opposed to a project. */
+export function isGptGizmoId(value: unknown): value is string {
+  return typeof value === "string" && GPT_GIZMO_ID.test(value);
+}
+
+export interface ChatGPTGptSummary {
+  gizmoId: string;
+  name: string;
+  description: string;
+  instructions: string;
+  conversationStarters: string[];
+  knowledgeFileNames: string[];
+}
+
+/** Every string in `value`, or an empty array if it isn't an array of strings. */
+function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((v): v is string => typeof v === "string" && v.length > 0);
+}
+
+/** Knowledge file names from `resource.files`, skipping unnamed entries. */
+function readFileNames(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const names: string[] = [];
+  for (const file of value) {
+    if (typeof file !== "object" || file === null) continue;
+    const name = (file as Record<string, unknown>).name;
+    if (typeof name === "string" && name) names.push(name);
+  }
+  return names;
+}
+
+/**
+ * Pulls one GPT out of a `cuts[].list.items[]` entry, or null if it isn't
+ * one. Note the extra `resource` level: this listing nests one deeper than
+ * the projects sidebar listing.
+ */
+function readGptItem(item: unknown): ChatGPTGptSummary | null {
+  if (typeof item !== "object" || item === null) return null;
+  const resource = (item as Record<string, unknown>).resource;
+  if (typeof resource !== "object" || resource === null) return null;
+
+  const { gizmo, files } = resource as Record<string, unknown>;
+  if (typeof gizmo !== "object" || gizmo === null) return null;
+
+  const { id, display, instructions } = gizmo as Record<string, unknown>;
+  if (!isGptGizmoId(id)) return null;
+  if (typeof display !== "object" || display === null) return null;
+
+  const d = display as Record<string, unknown>;
+  if (typeof d.name !== "string") return null;
+
+  return {
+    gizmoId: id,
+    name: d.name,
+    // Field names confirmed live on 2026-09-20: display.description and
+    // display.prompt_starters both exist and were populated.
+    description: typeof d.description === "string" ? d.description : "",
+    instructions: typeof instructions === "string" ? instructions : "",
+    conversationStarters: readStringArray(d.prompt_starters),
+    knowledgeFileNames: readFileNames(files),
+  };
+}
+
+/** The `mine` cut of a /gizmos/mine response, or null if it isn't there. */
+function findMineCut(body: unknown): Record<string, unknown> | null {
+  if (typeof body !== "object" || body === null) return null;
+  const cuts = (body as Record<string, unknown>).cuts;
+  if (!Array.isArray(cuts)) return null;
+
+  for (const cut of cuts) {
+    if (typeof cut !== "object" || cut === null) continue;
+    const info = (cut as Record<string, unknown>).info;
+    if (typeof info !== "object" || info === null) continue;
+    // "recent" is the other cut, and it includes GPTs the user does not own.
+    if ((info as Record<string, unknown>).id === "mine") {
+      return cut as Record<string, unknown>;
+    }
+  }
+  return null;
+}
+
+/**
+ * Every custom GPT the signed-in user owns, with its full config: name,
+ * description, instructions, conversation starters and knowledge file
+ * names. One call replaces navigating to each GPT's editor page.
+ *
+ * Reads the `mine` cut only. Paging follows `cuts[].list.cursor`, but note
+ * that /gizmos/mine ignores unknown query parameters (verified: a garbage
+ * param returns the same body), so `?cursor=` may well be ignored too. The
+ * duplicate check below is what makes that safe: a page that adds nothing
+ * new ends the loop instead of spinning.
+ */
+export async function listGptSummaries(): Promise<ChatGPTGptSummary[]> {
+  const gpts: ChatGPTGptSummary[] = [];
+  const seen = new Set<string>();
+  let cursor: string | null = null;
+
+  for (let page = 0; page < MAX_GPT_PAGES; page++) {
+    const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
+    const body = await chatgptRequest<unknown>(`${MINE_PATH}${query}`);
+
+    const cut = findMineCut(body);
+    if (!cut) break;
+
+    const list = cut.list;
+    if (typeof list !== "object" || list === null) break;
+
+    const { items, cursor: nextCursor } = list as Record<string, unknown>;
+    if (!Array.isArray(items)) break;
+
+    let added = 0;
+    for (const item of items) {
+      const gpt = readGptItem(item);
+      if (!gpt || seen.has(gpt.gizmoId)) continue;
+      seen.add(gpt.gizmoId);
+      gpts.push(gpt);
+      added++;
+    }
+
+    cursor = typeof nextCursor === "string" && nextCursor ? nextCursor : null;
+    if (!cursor || added === 0) break;
+  }
+
+  return gpts;
 }
 
 /**

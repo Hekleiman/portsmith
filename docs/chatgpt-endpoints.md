@@ -2,7 +2,7 @@
 
 **Status: observed live on 2026-09-20**, in a signed-in chatgpt.com tab, read-only GETs only. See "Observed" below. The earlier note that chatgpt.com could not be opened no longer applies.
 
-This page lists what the code expects, so the check can be done by hand in DevTools. It needs about 10 minutes, and only GET requests are involved. Fill in the "Observed" column, and use redacted examples only.
+This page lists what the code expects, then what was actually observed. Use redacted examples only.
 
 ---
 
@@ -91,11 +91,13 @@ at all**, so no selector change can restore discovery.
 The only href patterns left in the sidebar are `/`, `/images`,
 `/library?entry_point=sidebar`, `/scheduled`, `/plugins`, `/codex` and `/c/<conversation>`.
 
+The **page** URL is unchanged and still matches what the code expects: `https://chatgpt.com/g/g-p-<32 hex>/project`, plus `?tab=sources` for the Sources tab. So `extractSingleProject()`, which is driven by a gizmo ID rather than by the link, is unaffected. The breakage is scoped to discovery.
+
 ### Custom GPTs: which endpoint lists them
 
-Investigated, not implemented. `/backend-api/gizmos/bootstrap` was the suggested
-candidate but is **not** the right source: it returns `{ gizmos: [ { flair, resource } ] }`
-and gave only 1 entry, which looks like recency or pinning rather than a listing.
+`/backend-api/gizmos/bootstrap` is **not** the right source: it returns
+`{ gizmos: [ { flair, resource } ] }` and gave only 1 entry, which looks like recency
+or pinning rather than a listing.
 
 The listing endpoint is **`GET /backend-api/gizmos/mine`**:
 
@@ -110,12 +112,47 @@ The listing endpoint is **`GET /backend-api/gizmos/mine`**:
   includes GPTs the user does not own.
 - Items are nested one level deeper than the projects listing:
   `cuts[].list.items[].resource.gizmo`, not `items[].gizmo`.
-- Each `gizmo` carries `id`, `display.name`, `instructions`, `gizmo_type: "gpt"`,
-  `author`, `updated_at`; `resource.files` is an array.
-- `cuts[].list.cursor` exists for paging and came back empty here.
 - `/backend-api/gizmos/discovery/mine` returns **404**.
 
-Implementing GPT discovery against this is deliberately left for a later change.
+#### `gizmo.display`, as observed
+
+Checked on 2026-09-20 against a real GPT. Field names and value types only:
+
+| Field | Type | Populated |
+|---|---|---|
+| `name` | string | yes |
+| `description` | string | yes |
+| `prompt_starters` | string[] | yes (4 entries) |
+| `categories` | array | empty |
+| `emoji` | null | no |
+| `theme` | null | no |
+| `profile_pic_id` | string | yes |
+| `profile_picture_url` | string | yes |
+
+`instructions` is a populated string on `gizmo` itself, not under `display`. There is
+no other conversation-starter field on `gizmo`: `prompt_starters` under `display` is
+the only one. `gizmo.gizmo_type` is `"gpt"`. The GPT's `id` matched `^g-[A-Za-z0-9]{9}$`.
+
+PortSmith maps `display.name`, `display.description`, `display.prompt_starters` and
+`gizmo.instructions` into `ExtractedCustomGPT`, and leaves anything absent empty.
+
+`resource.files` is an array, but it was **empty** on the only GPT available, so the
+item shape is unverified for GPTs. The parser reads a string `name` off each entry and
+skips the rest, matching the projects listing's `files[]` shape. Knowledge-file
+download for GPTs is not implemented.
+
+#### Paging, unverified
+
+`cuts[].list.cursor` exists and came back empty on this account, so paging could not be
+exercised. Worse, **`/gizmos/mine` silently ignores unknown query parameters**: verified
+that `?zzz_not_a_param=1`, `?cursor=abc123` and `?cursor=abc123&cut_id=mine` all return
+200 with the same single item as the plain call. So `?cursor=` is a guess and may be a
+no-op.
+
+`listGptSummaries` handles this by ending the loop when a page adds no new gizmo ID,
+so a cursor that is ignored costs one extra request rather than spinning. If an account
+with more than one page of GPTs turns up, confirm the real parameter name before
+trusting multi-page results.
 
 ### Still unchecked
 
@@ -123,43 +160,19 @@ Items 3 (file download), 4 (memories listing shape), 4b (custom instructions) an
 (`ChatGPT-Account-Id` on a Team or Enterprise workspace) from the table above were not
 part of this pass.
 
-## Proposal: read memories and custom instructions via the API
+### Method
 
-Only apply this after step 4 of the check confirms the endpoints.
+The write contract below was observed live on 2026-09-20 against a signed-in Free-plan account, by patching `window.fetch` and `XMLHttpRequest.prototype.open` in the page and driving the real UI. Telemetry (`/ces/v1/t`) filtered out of every capture.
 
-1. Add a `FETCH_CHATGPT_PERSONALIZATION` handler in the service worker next to `FETCH_GIZMO_API`. It should use the same cached bearer token, run in the MAIN world, and accept only requests from the ChatGPT content script.
-2. **Memories:** `GET /backend-api/memories` (with whatever query the UI sends). Map each item's text and update time to a `MemoryItem`. If the response is paged, follow the cursor until it's done or a cap of 1,000 is reached.
-3. **Custom instructions:** `GET /backend-api/user_system_messages`. Map the "about you" and "how to respond" fields to `globalInstructions`, and skip the fields that are turned off.
-4. **Workspaces:** if step 5 shows the header is required, read the current account from `/backend-api/accounts/check` or from the page, and send `ChatGPT-Account-Id` on every call (gizmos, files, memories).
-5. Keep the settings UI reader as the fallback. When an API call fails, add a warning and fall back to the UI. Don't fail the extraction.
-6. **Tests:** add unit tests with recorded, redacted response fixtures in `tests/fixtures/`.
-Observed live on 2026-09-20 against a signed-in Free-plan account, by patching `window.fetch` and `XMLHttpRequest.prototype.open` in the page and driving the real UI. Telemetry (`/ces/v1/t`) filtered out of every capture.
-
-### 1. Project URLs — EXPECTATION IS WRONG
-
-The sidebar no longer renders projects as links. Measured in the live DOM:
-
-| Check | Result |
-|---|---|
-| `a[href]` total in page | 37 |
-| anchors whose href contains `g-p-` | **0** |
-| anchors whose href ends `/project` | **0** |
-| `button[aria-label="Open project home"]` | 5 (matches the account's visible projects) |
-| sidebar href patterns remaining | `/`, `/images`, `/library?entry_point=sidebar`, `/scheduled`, `/plugins`, `/codex`, `/c/<conversation>` |
-
-Projects are `<button aria-label="Open project home">` with no href, inside a "Projects" section with a "Show more" control. Per-project option menus carry `aria-label="Open project options for <name>"`, so **names are still in the DOM but gizmo IDs are not**. `PROJECT_SIDEBAR.projectLinks` and `GPT_LIST.gptCards` therefore resolve zero elements and `scanSidebar()` returns empty. This cannot be repaired by updating a selector; there is no element carrying the ID.
-
-The **page** URL is unchanged and still matches what the code expects: `https://chatgpt.com/g/g-p-<32 hex>/project`, plus `?tab=sources` for the Sources tab. So `extractSingleProject()`, which is driven by a gizmo ID rather than by the link, is unaffected. The breakage is scoped to discovery.
-
-### 2. Project details
+### Project details
 
 Bare IDs confirmed. The sidebar fetches `GET /backend-api/gizmos/g-p-<32 hex>` with no slug appended. The slug-fallback path is not needed for this shape.
 
-### 3. Auth
+### Sentinel
 
-`GET /backend-api/memories?include_memory_entries=false` with `credentials: "include"` and no other headers returns **401**. Cookies alone are not sufficient; the bearer token is required. No sentinel proof-of-work token gates any project read or write: `/backend-api/sentinel/chat-requirements/finalize` fires on page load and `/backend-api/sentinel/heartbeat` periodically, but neither is a per-request gate.
+No sentinel proof-of-work token gates any project read or write: `/backend-api/sentinel/chat-requirements/finalize` fires on page load and `/backend-api/sentinel/heartbeat` periodically, but neither is a per-request gate.
 
-### 4. Memories and custom instructions
+### Memories and custom instructions (endpoints seen)
 
 `GET /backend-api/memories?include_memory_entries=false` and `GET /backend-api/user_system_messages` both exist and fire on page load. Reading these via API should remove the "only readable when the settings page is open" limitation noted in the v0.4.0 audit. Response shapes not yet inspected.
 
@@ -169,7 +182,7 @@ Bare IDs confirmed. The sidebar fetches `GET /backend-api/gizmos/g-p-<32 hex>` w
 
 Namespace is `/backend-api/projects`, not `/backend-api/gizmos`. Gizmos is read-only.
 
-**Create** — `POST /backend-api/projects`
+**Create** , `POST /backend-api/projects`
 
 ```json
 {"instructions":"","name":"<name>","memory_scope":"unset"}
@@ -177,13 +190,13 @@ Namespace is `/backend-api/projects`, not `/backend-api/gizmos`. Gizmos is read-
 
 Returns 200 with the new gizmo; id is `g-p-<32 hex>`. `instructions` is accepted on create, so project plus instructions is one call.
 
-**Update** — `PATCH /backend-api/projects/{gizmo_id}`
+**Update** , `PATCH /backend-api/projects/{gizmo_id}`
 
 ```json
 {"name":"<name>","instructions":"<text>","emoji":null,"theme":null}
 ```
 
-**Knowledge file** — three steps
+**Knowledge file** , three steps
 
 1. `POST /backend-api/files`
 
@@ -195,7 +208,7 @@ Returns 200 with the new gizmo; id is `g-p-<32 hex>`. `instructions` is accepted
  "client_resolved_mime_type":"text/plain"}
 ```
 
-2. `PUT https://sdmntpr<region>.oaiusercontent.com/files/{uuid}/raw` — raw bytes, sent as XHR. Host comes from step 1; do not hardcode it.
+2. `PUT https://sdmntpr<region>.oaiusercontent.com/files/{uuid}/raw` , raw bytes, sent as XHR. Host comes from step 1; do not hardcode it.
 
 3. `POST /backend-api/files/process_upload_stream`
 
@@ -213,3 +226,14 @@ Returns 200 with the new gizmo; id is `g-p-<32 hex>`. `instructions` is accepted
 - Upload exercised with one small `text/plain` file. `supports_direct_azure_multipart: true` implies a separate large-file path that was not observed.
 - Deletion not probed.
 - Whether `/backend-api/gizmos/snorlax/sidebar` also returns GPTs (as opposed to projects only) is **not** established. `/backend-api/gizmos/bootstrap` was seen on page load and may be the GPT source.
+
+## Proposal: read memories and custom instructions via the API
+
+Only apply this after step 4 of the check confirms the endpoints.
+
+1. Add a `FETCH_CHATGPT_PERSONALIZATION` handler in the service worker next to `FETCH_GIZMO_API`. It should use the same cached bearer token, run in the MAIN world, and accept only requests from the ChatGPT content script.
+2. **Memories:** `GET /backend-api/memories` (with whatever query the UI sends). Map each item's text and update time to a `MemoryItem`. If the response is paged, follow the cursor until it's done or a cap of 1,000 is reached.
+3. **Custom instructions:** `GET /backend-api/user_system_messages`. Map the "about you" and "how to respond" fields to `globalInstructions`, and skip the fields that are turned off.
+4. **Workspaces:** if step 5 shows the header is required, read the current account from `/backend-api/accounts/check` or from the page, and send `ChatGPT-Account-Id` on every call (gizmos, files, memories).
+5. Keep the settings UI reader as the fallback. When an API call fails, add a warning and fall back to the UI. Don't fail the extraction.
+6. **Tests:** add unit tests with recorded, redacted response fixtures in `tests/fixtures/`.

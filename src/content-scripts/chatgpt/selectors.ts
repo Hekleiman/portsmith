@@ -190,9 +190,15 @@ export const GPT_EDITOR = {
 // navigating into each editor page.
 
 export const GPT_LIST = {
-  /** GPT links in the sidebar. Each is a nav <a> with href /g/g-<id>.
-   *  Excludes project links (href ending in /project).
-   *  Example: /g/g-1Z8uzeu5R-resume-wizard */
+  /** DEAD as of 2026-09-20: resolves zero elements, for the same reason
+   *  as PROJECT_SIDEBAR.projectLinks. The sidebar renders no /g/ anchors
+   *  at all any more, so there is no gizmo ID in the DOM to read.
+   *  Discovery reads listGptSummaries() instead, which also returns each
+   *  GPT's full config and removes the old editor-page navigation.
+   *  Kept for reference and for the checkLoggedIn() DOM fallback.
+   *
+   *  Was: GPT links in the sidebar, each a nav <a> with href /g/g-<id>,
+   *  excluding project links, e.g. /g/g-1Z8uzeu5R-resume-wizard */
   gptCards: [
     {
       priority: 1,

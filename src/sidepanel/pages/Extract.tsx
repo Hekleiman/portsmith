@@ -242,8 +242,8 @@ function ChatGPTExtract(): React.JSX.Element {
             const scanResult = await safeSendTabMessage(tabId, "SCAN_SIDEBAR");
             projectTargets = scanResult.projects;
 
-            // Sidebar scan is the reliable source for GPT discovery;
-            // extractCustomGPTs() only enriches it on GPT editor pages.
+            // Names only, as a placeholder. Step 3 replaces these with the
+            // full configs, which the same API call already returns.
             if (scanResult.gpts.length > 0) {
               domDataRef.current.customGPTs = scanResult.gpts.map((item) => ({
                 id: item.id,
