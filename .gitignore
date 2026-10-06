@@ -13,3 +13,6 @@ Claude outputs/
 
 # Packed builds (dist.crx is still tracked; git rm --cached it)
 *.crx
+
+# Internal audit notes (kept locally, not published)
+CODEBASE_AUDIT.md
