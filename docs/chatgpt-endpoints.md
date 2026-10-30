@@ -236,7 +236,7 @@ There is no description field on a ChatGPT project.
 
 **Duplicate check:** `/backend-api/gizmos/snorlax/sidebar?owned_only=true` lists a just-created project immediately; names are matched case- and space-insensitively.
 
-**Message size:** files reach the content script as base64 in one `chrome.tabs.sendMessage`, which Chrome caps at 64 MiB, so PortSmith leaves any file over 48 MiB (`MAX_MESSAGE_FILE_BYTES`) for the user to add by hand, well under the 512 MiB ceiling.
+**Message size:** files reach the content script as base64 in one `chrome.tabs.sendMessage`, which Chrome caps at 64 MiB, so PortSmith leaves any file over 47 MiB (`MAX_MESSAGE_FILE_BYTES`) for the user to add by hand, well under the 512 MiB ceiling.
 
 ## Caveats
 

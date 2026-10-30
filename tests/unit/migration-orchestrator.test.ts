@@ -1404,7 +1404,7 @@ describe("MigrationOrchestrator: ChatGPT target", () => {
     const status = o.getStatus();
     expect(status.knowledgeLeftovers.a?.fileNames).toEqual(["huge.zip"]);
     expect(status.followUps.a).toContain(
-      "Add 1 file to the project's Sources by hand (huge.zip: too large to pass through the extension (over 48 MB): add it by hand)",
+      "Add 1 file to the project's Sources by hand (huge.zip: too large to pass through the extension (over 47 MB): add it by hand)",
     );
   });
 

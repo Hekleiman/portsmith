@@ -178,7 +178,10 @@ describe("ChatGPT leftover card", () => {
 describe("message size cap", () => {
   it("keeps Claude's file limit under what one message can carry", () => {
     expect(CLAUDE_PROJECT_FILE_LIMIT_BYTES).toBeLessThanOrEqual(MAX_MESSAGE_FILE_BYTES);
-    // base64 grows bytes by a third; Chrome caps a message at 64 MiB.
-    expect((MAX_MESSAGE_FILE_BYTES * 4) / 3).toBeLessThanOrEqual(64 * 1024 * 1024);
+    // base64 grows bytes by a third; Chrome caps a message at 64 MiB, and
+    // the JSON envelope around the file needs room too (1 MiB of headroom).
+    expect(Math.ceil(MAX_MESSAGE_FILE_BYTES / 3) * 4 + 1024 * 1024).toBeLessThanOrEqual(
+      64 * 1024 * 1024,
+    );
   });
 });
