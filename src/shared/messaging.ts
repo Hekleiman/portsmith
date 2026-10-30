@@ -176,12 +176,14 @@ export interface MigrationGuidedInstructions {
 
 /** Knowledge that didn't reach a Gem during an automatic run. */
 export interface KnowledgeLeftover {
-  /** Where to add it (the Gem editor when the Gem is known) */
+  /** Where to add it (the Gem editor or the project's Sources when known) */
   link: string;
   /** Copied files that still need adding, by name */
   fileNames: string[];
   /** Whether the project memory document still needs adding */
   projectMemory: boolean;
+  /** ChatGPT: the full-instructions file that didn't reach the project */
+  instructionsFile?: string;
 }
 
 export interface OrchestratorStatus {

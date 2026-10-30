@@ -61,7 +61,7 @@ export interface MigrationStateSnapshot {
   /** Knowledge to add by hand after the run, per workspace */
   knowledgeLeftovers?: Record<
     string,
-    { link: string; fileNames: string[]; projectMemory: boolean }
+    { link: string; fileNames: string[]; projectMemory: boolean; instructionsFile?: string }
   >;
   /** Steps an automatic run left for the user, per workspace */
   leftoverSteps?: Record<string, MigrationStepFallback[]>;

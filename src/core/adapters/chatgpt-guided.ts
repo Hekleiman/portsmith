@@ -1,18 +1,23 @@
 // ─── ChatGPT Guided Instructions ────────────────────────────
-// ChatGPT has no automated importer yet, so ChatGPT as a target is a
-// guided flow: create a project, paste the instructions, add the files
-// and the project memory document.
-// UI labels follow OpenAI's "Projects in ChatGPT" help article (2026).
+// The guided route into ChatGPT (Autofill and Hybrid use the importer in
+// content-scripts/chatgpt/importer.ts): create a project, paste the
+// instructions, add the files and the project memory document. The name
+// and instructions are fitted to ChatGPT's limits first, so the user is
+// never asked to paste text ChatGPT refuses.
+// UI labels as seen on chatgpt.com on 2026-10-30.
 
 import type { MemoryItem, Workspace } from "@/core/schema/types";
 import type {
   MigrationGuidedInstructions,
   MigrationStepFallback,
 } from "@/shared/messaging";
-import { getInstructionsForTarget } from "@/core/platforms";
 import { hasProjectMemory } from "@/core/transform/project-memory";
 import { renderMemoryImportText } from "@/core/transform/memory-export";
-import { buildDownloads } from "./manual-fallback";
+import { buildDownloads, fitForTarget } from "./manual-fallback";
+import {
+  CHATGPT_INSTRUCTIONS_MAX,
+  CHATGPT_PROJECT_NAME_MAX,
+} from "@/core/transform/chatgpt-limits";
 
 const CHATGPT_URL = "https://chatgpt.com/";
 
@@ -20,39 +25,62 @@ export function generateChatGPTInstructions(
   workspace: Workspace,
   sourceLabel = "your previous assistant",
 ): MigrationGuidedInstructions {
-  const instructions = getInstructionsForTarget(workspace, "chatgpt");
+  const fit = fitForTarget(workspace, "chatgpt", sourceLabel);
+  const instructions = fit.instructions;
   const steps: MigrationStepFallback[] = [];
   const next = (): number => steps.length + 1;
 
+  const createLines = [
+    'Open ChatGPT, click the + next to "Projects" in the sidebar, paste the name below and click "Create project".',
+  ];
+  if (fit.nameTrimmed) {
+    createLines.push(
+      "",
+      `ChatGPT allows ${CHATGPT_PROJECT_NAME_MAX} characters in a project name, so "${workspace.name.trim()}" is shortened to the name below.`,
+    );
+  }
   steps.push({
     id: `${workspace.id}-create`,
     title: "Create a project",
-    description:
-      'Open ChatGPT, click "New project" in the sidebar and paste the name below. You can also pick an icon and color.',
-    copyBlocks: [{ label: "Project name", content: workspace.name }],
+    description: createLines.join("\n"),
+    copyBlocks: [{ label: "Project name", content: fit.name }],
     link: CHATGPT_URL,
-    actionHint: 'Click "New project", paste the name, create it',
+    actionHint: 'Click the + next to "Projects", paste the name, click "Create project"',
     stepNumber: next(),
   });
 
   if (instructions.trim()) {
+    const lines = [
+      'In the project, click the three dots at the top right, choose "Project settings", paste the instructions and click "Save".',
+    ];
+    if (fit.overflow) {
+      lines.push(
+        "",
+        `ChatGPT allows ${CHATGPT_INSTRUCTIONS_MAX} characters of instructions, so these are shortened at a paragraph break. The full text is in ${fit.overflow.fileName}, which you add with the files in the next step.`,
+      );
+    }
     steps.push({
       id: `${workspace.id}-instructions`,
       title: "Add the instructions",
-      description:
-        'In the project, click the three dots at the top right, choose "Project settings", paste the instructions and save.',
+      description: lines.join("\n"),
       copyBlocks: [{ label: "Project instructions", content: instructions }],
       actionHint: 'Three dots → "Project settings" → paste → save',
       stepNumber: next(),
     });
   }
 
-  const downloads = buildDownloads(workspace, sourceLabel);
+  const downloads = [
+    ...(fit.overflow ? [fit.overflow] : []),
+    ...buildDownloads(workspace, sourceLabel),
+  ];
   const notCopied = workspace.knowledgeFiles.filter((f) => !f.contentRef);
   if (downloads.length > 0 || notCopied.length > 0) {
     const lines = [
-      "Add these to the project's files (sources). Plans limit how many files a project can hold (Free 5, Plus/Go 25, Pro and business plans 40).",
+      'Open the project\'s Sources tab, click "Add sources" and add these files. Plans limit how many files a project can hold (Free 5, Plus/Go 25, Pro and business plans 40).',
     ];
+    if (fit.overflow) {
+      lines.push(`${fit.overflow.fileName} holds the full instructions.`);
+    }
     if (hasProjectMemory(workspace)) {
       lines.push(
         `The project memory file holds what ${sourceLabel} remembered from chats in this project.`,
@@ -72,7 +100,7 @@ export function generateChatGPTInstructions(
       copyBlocks: [],
       downloads,
       fileNames: notCopied.map((f) => f.originalName),
-      actionHint: "Upload the files to the project",
+      actionHint: 'Sources tab → "Add sources"',
       stepNumber: next(),
     });
   }
