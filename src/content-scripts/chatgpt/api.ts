@@ -55,11 +55,18 @@ const MAX_GPT_PAGES = 50;
 
 export class ChatGPTApiError extends Error {
   public readonly status: number;
+  /**
+   * The error response's body, for reading structured errors (see
+   * `readValidationError`). Only set from error responses, which never
+   * carry the token. Never set from the session response.
+   */
+  public readonly body: string;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, body = "") {
     super(message);
     this.name = "ChatGPTApiError";
     this.status = status;
+    this.body = body;
   }
 }
 
@@ -147,16 +154,17 @@ function clientHeaders(): Record<string, string> {
 }
 
 /**
- * JSON request against /backend-api/, with the bearer token attached.
- * Retries HTTP 429 honouring `retry-after`, and retries once on 401 after
- * forcing a token refresh. String bodies are sent as JSON; FormData bodies
- * keep the browser's multipart boundary header.
+ * Sends a request against /backend-api/ with the bearer token attached,
+ * and returns the first successful response. Retries HTTP 429 honouring
+ * `retry-after`, and retries once on 401 after forcing a token refresh.
+ * String bodies are sent as JSON; FormData bodies keep the browser's
+ * multipart boundary header.
  */
-export async function chatgptRequest<T>(
+async function sendWithAuth(
   path: string,
-  init: RequestInit = {},
-  retries = 3,
-): Promise<T> {
+  init: RequestInit,
+  retries: number,
+): Promise<Response> {
   let throttled = 0;
   let refreshed = false;
 
@@ -199,13 +207,91 @@ export async function chatgptRequest<T>(
       throw new ChatGPTApiError(
         resp.status,
         `HTTP ${resp.status}${text ? `: ${text.slice(0, 200)}` : ""}`,
+        text,
       );
     }
 
-    if (resp.status === 204) return undefined as T;
-    const text = await resp.text();
-    return (text ? JSON.parse(text) : undefined) as T;
+    return resp;
   }
+}
+
+/** JSON request against /backend-api/. See `sendWithAuth` for retries. */
+export async function chatgptRequest<T>(
+  path: string,
+  init: RequestInit = {},
+  retries = 3,
+): Promise<T> {
+  const resp = await sendWithAuth(path, init, retries);
+  if (resp.status === 204) return undefined as T;
+  const text = await resp.text();
+  return (text ? JSON.parse(text) : undefined) as T;
+}
+
+/**
+ * Like `chatgptRequest`, but returns the raw body text. For endpoints
+ * whose body isn't one JSON document, such as the newline-delimited
+ * events from /files/process_upload_stream.
+ */
+export async function chatgptRequestText(
+  path: string,
+  init: RequestInit = {},
+  retries = 3,
+): Promise<string> {
+  const resp = await sendWithAuth(path, init, retries);
+  if (resp.status === 204) return "";
+  return resp.text();
+}
+
+// ─── Validation errors ──────────────────────────────────────
+
+/** Readable names for the fields ChatGPT validates on project writes. */
+const FIELD_LABELS: Record<string, string> = {
+  name: "a project name",
+  instructions: "project instructions",
+};
+
+/**
+ * Turns a 422 validation error into a short sentence, such as "ChatGPT
+ * allows at most 50 characters in a project name". The body looks like
+ * `{"detail":[{"type":"string_too_long","loc":["body","name"],"msg":"...",
+ * "ctx":{"max_length":50}}]}`. Returns null for anything else.
+ */
+export function readValidationError(err: ChatGPTApiError): string | null {
+  if (err.status !== 422 || !err.body) return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(err.body);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const detail = (parsed as Record<string, unknown>).detail;
+  if (!Array.isArray(detail)) return null;
+
+  const sentences: string[] = [];
+  for (const entry of detail) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const { type, loc, msg, ctx } = entry as Record<string, unknown>;
+
+    const field = Array.isArray(loc) ? loc[loc.length - 1] : undefined;
+    const label =
+      typeof field === "string"
+        ? (FIELD_LABELS[field] ?? `the ${field} field`)
+        : "the request";
+    const max =
+      typeof ctx === "object" && ctx !== null
+        ? (ctx as Record<string, unknown>).max_length
+        : undefined;
+
+    if (type === "string_too_long" && typeof max === "number") {
+      sentences.push(`ChatGPT allows at most ${max} characters in ${label}`);
+    } else if (typeof msg === "string" && msg) {
+      sentences.push(`ChatGPT rejected ${label}: ${msg}`);
+    }
+  }
+
+  return sentences.length > 0 ? sentences.join(". ") : null;
 }
 
 // ─── Projects ───────────────────────────────────────────────
