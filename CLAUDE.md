@@ -6,7 +6,7 @@ PortSmith is a Chrome (MV3) extension that moves AI assistant setups (projects, 
 
 **Current version: 0.4.0.** Six directions:
 - Into Claude and Gemini: automatic (internal web APIs from content scripts), with manual fallback cards.
-- Into ChatGPT: guided only (no automated importer yet).
+- Into ChatGPT: automatic for projects, instructions and Sources files; memory and custom instructions stay guided.
 - Same-platform migrations are blocked.
 
 ---
@@ -138,8 +138,9 @@ portsmith/
 - `npm run typecheck`, `npm run lint`, `npm test`, `npm run build`
 - E2E (needs Playwright, which is intentionally not a dependency):
   `npm i --no-save playwright && npx playwright install chromium`, then
-  `node scripts/e2e-duplicate-dispatch.mjs dist` and `node scripts/e2e-claude-autofill.mjs dist`.
-  Both stub the sites with Playwright routes and never touch real accounts.
+  `node scripts/e2e-duplicate-dispatch.mjs dist`, `node scripts/e2e-claude-autofill.mjs dist`,
+  `node scripts/e2e-gemini-autofill.mjs dist` and `node scripts/e2e-chatgpt-autofill.mjs dist`.
+  All stub the sites with Playwright routes and never touch real accounts.
 
 ## Platform APIs (internal, unversioned)
 
@@ -152,6 +153,7 @@ These are the sites' own web APIs, so they can change without notice. Check them
 - **ChatGPT:**
   - `/backend-api/gizmos/{id}` needs a bearer token from `/api/auth/session`.
   - Project IDs are `g-p-<32 hex>`, and sidebar URLs add a slug after it. Normalize with `src/shared/chatgpt-ids.ts`.
+  - Writes (`src/content-scripts/chatgpt/importer.ts`): `POST /backend-api/projects` creates a project with its name (max 50 code points) and instructions (max 8000) in one call; over either is a 422 and nothing is made, so fit them first with `src/core/transform/chatgpt-limits.ts`. A Sources file takes four steps (reserve, PUT to the upload host without the bearer token, `process_upload_stream`, attach). Details in `docs/chatgpt-endpoints.md`.
 
 ---
 

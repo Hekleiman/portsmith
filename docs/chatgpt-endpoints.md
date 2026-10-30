@@ -178,52 +178,71 @@ No sentinel proof-of-work token gates any project read or write: `/backend-api/s
 
 ---
 
-## Write API (observed live 2026-09-20)
+## Write API (verified live 2026-10-30)
 
-Namespace is `/backend-api/projects`, not `/backend-api/gizmos`. Gizmos is read-only.
+Verified from a signed-in Plus account by driving the real UI, then replaying each step from a page script that sends only the headers `chatgptRequest` sends (bearer token, `oai-device-id`, `oai-language`, `Content-Type`). Implemented in `src/content-scripts/chatgpt/importer.ts`. Namespace is `/backend-api/projects`, not `/backend-api/gizmos`; gizmos is read-only.
 
-**Create** , `POST /backend-api/projects`
-
-```json
-{"instructions":"","name":"<name>","memory_scope":"unset"}
-```
-
-Returns 200 with the new gizmo; id is `g-p-<32 hex>`. `instructions` is accepted on create, so project plus instructions is one call.
-
-**Update** , `PATCH /backend-api/projects/{gizmo_id}`
+**Create** , `POST /backend-api/projects`, one call for name and instructions
 
 ```json
-{"name":"<name>","instructions":"<text>","emoji":null,"theme":null}
+{"emoji":null,"instructions":"<text>","memory_scope":"unset","name":"<name>","theme":null}
 ```
 
-**Knowledge file** , three steps
+200 returns `{ resource: { gizmo: { id: "g-p-<32 hex>", instructions, ... }, files, ... } }`. The new id is `resource.gizmo.id`. The reply echoes `resource.gizmo.instructions`; PortSmith compares it with what it sent and reports a mismatch (the project exists either way).
 
-1. `POST /backend-api/files`
+**Limits** (server-side validation, HTTP 422, nothing is created): `name` at most **50**, `instructions` at most **8000**, both counted in **Unicode code points** (`[...s].length`), not UTF-16 units. A string with JS `.length` 8001 that held one emoji was accepted. An empty name passed validation. The 422 body:
 
 ```json
-{"file_name":"x.txt","file_size":56,"use_case":"agent","gizmo_id":"g-p-...",
- "timezone_offset_min":420,"reset_rate_limits":false,
- "supports_direct_azure_multipart":true,"mime_type":"text/plain",
- "entry_surface":"project_sources","selection_method":"file_picker",
- "client_resolved_mime_type":"text/plain"}
+{"detail":[{"type":"string_too_long","loc":["body","instructions"],"msg":"...","ctx":{"max_length":8000}}]}
 ```
 
-2. `PUT https://sdmntpr<region>.oaiusercontent.com/files/{uuid}/raw` , raw bytes, sent as XHR. Host comes from step 1; do not hardcode it.
+`src/core/transform/chatgpt-limits.ts` fits both before anything is sent: long names are cut at a word and end in "…", and long instructions are cut at a paragraph break with the full text moved to a `full-instructions-from-<source>.md` file in Sources.
 
-3. `POST /backend-api/files/process_upload_stream`
+There is no description field on a ChatGPT project.
+
+**Sources file** , four steps, all required, one file per run of the four
+
+1. Reserve: `POST /backend-api/files`
 
 ```json
-{"file_id":"file_<hex>","use_case":"agent","gizmo_id":"g-p-...",
- "index_for_retrieval":true,"file_name":"x.txt","entry_surface":"project_sources",
- "metadata":{"store_in_library":true,"is_temporary_chat":false,"is_project_thread":true}}
+{"file_name":"x.md","file_size":56,"gizmo_id":"g-p-...","mime_type":"text/markdown",
+ "reset_rate_limits":false,"supports_direct_azure_multipart":true,
+ "timezone_offset_min":420,"use_case":"gizmo"}
 ```
 
-**`entry_surface` decides where the file lands.** `"chat_composer"` attaches it to a pending chat message and leaves the project's Sources tab empty; `"project_sources"` puts it in Sources. Both were run and the difference confirmed on screen. This mirrors the Gemini shape (content-push upload, `ProcessFile`, then `kHv0Vd`).
+200 returns `{ status: "success", upload_url, file_id: "file_<hex>" }`. The ceiling is **512 MiB**: 536,870,912 bytes is accepted, one more byte returns 400 `{detail:{code:"file_too_large"}}`.
+
+2. Upload: `PUT <upload_url>` with the raw bytes and the headers `Content-Type: <mime>`, `x-ms-blob-type: BlockBlob`, `x-ms-version: 2020-04-08`, `x-ms-blob-content-type: <mime>`. Returns 201 with an empty body. The host is `sdmntpr<region>.oaiusercontent.com` with a SAS query string: take it from step 1, never build it. Plain `fetch` with no credentials: **the bearer token must never go to the upload host**. Azure's CORS allows the chatgpt.com origin, so a content script can make this call.
+
+3. Process: `POST /backend-api/files/process_upload_stream`
+
+```json
+{"entry_surface":"project_sources","file_id":"file_<hex>","file_name":"x.md",
+ "gizmo_id":"g-p-...","index_for_retrieval":true,"mime_type":"text/markdown","use_case":"gizmo"}
+```
+
+200 with content type `text/event-stream`, but the body is **newline-delimited JSON objects** (no `data:` prefix). Events in order: `file.processing.started`, a "ready to download" event (`file.processing.file_…`), `file.indexing.completed`, `file.processing.completed`. Success means `file.processing.completed` was seen.
+
+4. Attach: `POST /backend-api/projects/{gizmo_id}/files`
+
+```json
+{"files":[{"file_id":"file_<hex>","last_modified":1761868800000,"location":"fs",
+ "name":"x.md","size":56,"type":"text/markdown"}]}
+```
+
+200 returns `{ resource: { gizmo, files: [...] } }`, where `files` is the project's full list afterwards. Without this step the file is processed but never appears in the project (verified both ways). It **appends**: sending one file kept the earlier ones, so no final save is needed.
+
+**What changed since 2026-09-20:** `use_case` is `"gizmo"` (was `"agent"`); `selection_method`, `client_resolved_mime_type` and `metadata` are no longer sent; step 4 is new. `entry_surface: "project_sources"` still decides that the file lands in Sources (`"chat_composer"` attaches it to a pending chat message instead).
+
+**Duplicate check:** `/backend-api/gizmos/snorlax/sidebar?owned_only=true` lists a just-created project immediately; names are matched case- and space-insensitively.
+
+**Message size:** files reach the content script as base64 in one `chrome.tabs.sendMessage`, which Chrome caps at 64 MiB, so PortSmith leaves any file over 48 MiB (`MAX_MESSAGE_FILE_BYTES`) for the user to add by hand, well under the 512 MiB ceiling.
 
 ## Caveats
 
-- Free plan only. Rate limits, the per-plan file cap (Free 5, Plus/Go 25, Pro and business 40) and Team/Enterprise behaviour are unverified. `ChatGPT-Account-Id` still unverified.
-- Upload exercised with one small `text/plain` file. `supports_direct_azure_multipart: true` implies a separate large-file path that was not observed.
+- The 2026-10-30 contract was verified on one Plus account. Team/Enterprise behaviour and whether `ChatGPT-Account-Id` is needed there are unverified.
+- The per-plan file caps (Free 5, Plus/Go 25, Pro and business 40) and rate limits are unverified.
+- `supports_direct_azure_multipart: true` implies a separate large-file path that was not observed.
 - Deletion not probed.
 - Whether `/backend-api/gizmos/snorlax/sidebar` also returns GPTs (as opposed to projects only) is **not** established. `/backend-api/gizmos/bootstrap` was seen on page load and may be the GPT source.
 
