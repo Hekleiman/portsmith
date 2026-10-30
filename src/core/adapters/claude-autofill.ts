@@ -206,6 +206,8 @@ function projectUrl(uuid: string): string {
 /**
  * Claude's documented per-file limit for project files
  * (support.claude.com, "Upload files to Claude", checked Sep 2026).
+ * It sits under MAX_MESSAGE_FILE_BYTES (shared/constants.ts), so every
+ * file this path sends fits in one message to the content script.
  */
 export const CLAUDE_PROJECT_FILE_LIMIT_BYTES = 30 * 1024 * 1024;
 

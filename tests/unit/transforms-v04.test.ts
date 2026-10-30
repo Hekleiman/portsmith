@@ -317,8 +317,9 @@ describe("platform helpers", () => {
     expect(platformLabel("bing")).toBe("the target platform");
   });
 
-  it("offers only guided delivery for ChatGPT", () => {
-    expect(supportedModesForTarget("chatgpt")).toEqual(["guided"]);
+  it("offers every delivery mode for every target", () => {
+    expect(supportedModesForTarget("chatgpt")).toEqual(["autofill", "guided", "hybrid"]);
+    expect(supportedModesForTarget("gemini")).toEqual(["autofill", "guided", "hybrid"]);
     expect(supportedModesForTarget("claude")).toEqual(["autofill", "guided", "hybrid"]);
   });
 

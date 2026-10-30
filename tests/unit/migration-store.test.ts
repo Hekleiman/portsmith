@@ -381,10 +381,10 @@ describe("platform selection guards", () => {
     expect(s.extractionMethod).toBeNull();
   });
 
-  it("switches to guided mode when ChatGPT becomes the target", () => {
+  it("keeps an automatic mode when ChatGPT becomes the target", () => {
     useMigrationStore.setState({ sourcePlatform: "claude", deliveryMode: "autofill" });
     useMigrationStore.getState().setTargetPlatform("chatgpt");
-    expect(useMigrationStore.getState().deliveryMode).toBe("guided");
+    expect(useMigrationStore.getState().deliveryMode).toBe("autofill");
   });
 
   it("ignores a saved target that equals the saved source", async () => {

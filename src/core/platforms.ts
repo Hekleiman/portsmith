@@ -37,13 +37,13 @@ export const PLATFORM_ITEM_NOUN: Record<PlatformId, string> = {
 };
 
 /**
- * Delivery modes each target supports. ChatGPT has no automated importer
- * yet, so it is guided-only.
+ * Delivery modes each target supports. Every target has an automated
+ * importer (Claude projects, Gemini Gems, ChatGPT projects), so all three
+ * modes are offered everywhere.
  */
 export function supportedModesForTarget(
-  target: string | null | undefined,
+  _target: string | null | undefined,
 ): DeliveryModeId[] {
-  if (target === "chatgpt") return ["guided"];
   return ["autofill", "guided", "hybrid"];
 }
 
