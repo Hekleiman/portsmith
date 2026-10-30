@@ -119,7 +119,7 @@
     <header>
       <h1>PortSmith Privacy Policy</h1>
       <p class="subtitle">Chrome extension for moving your AI assistant setup between ChatGPT, Claude and Gemini</p>
-      <p class="effective-date">Effective date: September 17, 2026 (version 0.4.0)</p>
+      <p class="effective-date">Effective date: October 30, 2026 (version 0.5.0)</p>
     </header>
 
     <h2>What PortSmith does</h2>
@@ -164,7 +164,7 @@
     <ul>
       <li><strong>Claude:</strong> creates projects, sets their instructions, adds knowledge documents and files, and adds a project memory document. It then reads the new projects back to check them</li>
       <li><strong>Gemini:</strong> creates Gems with their name, description and instructions, and adds the copied knowledge files and a project memory document to each Gem's knowledge. In automatic and hybrid mode it also saves your memories and custom instructions as entries in "Your instructions for Gemini"</li>
-      <li><strong>ChatGPT:</strong> nothing. PortSmith shows the steps and the text to copy, and you create the projects yourself</li>
+      <li><strong>ChatGPT:</strong> creates projects with their name and instructions, and adds the copied knowledge files and a project memory document to each project's Sources. When the instructions are longer than ChatGPT allows, it shortens them at a paragraph break and adds the full text as a file. Memories and custom instructions are not written: PortSmith shows the steps and the text to copy</li>
     </ul>
     <p>
       Copy buttons put text on your clipboard, and download buttons save files to your computer, only when you click them.
@@ -188,7 +188,7 @@
 
     <h2>What PortSmith sends over the network</h2>
     <p>
-      PortSmith only talks to chatgpt.com, claude.ai and gemini.google.com, using your existing sessions, from the tabs of those sites. When Gemini is the target, knowledge files are uploaded from the Gemini tab to content-push.googleapis.com, the Google upload service Gemini's own page uses for files. It has no analytics, telemetry, crash reporting or advertising, and no servers of its own.
+      PortSmith only talks to chatgpt.com, claude.ai and gemini.google.com, using your existing sessions, from the tabs of those sites. When Gemini is the target, knowledge files are uploaded from the Gemini tab to content-push.googleapis.com, the Google upload service Gemini's own page uses for files. When ChatGPT is the target, knowledge files are uploaded from the ChatGPT tab to ChatGPT's own file storage, at an oaiusercontent.com address that ChatGPT provides for each upload. Your ChatGPT session token is not sent there. It has no analytics, telemetry, crash reporting or advertising, and no servers of its own.
     </p>
 
     <h2>Permissions and why they are needed</h2>
@@ -226,7 +226,7 @@
       <tbody>
         <tr>
           <td><code>https://chatgpt.com/*</code></td>
-          <td>Read your GPTs, projects, files, memory and custom instructions.</td>
+          <td>Read your GPTs, projects, files, memory and custom instructions, or create projects when ChatGPT is the target.</td>
         </tr>
         <tr>
           <td><code>https://claude.ai/*</code></td>
@@ -252,7 +252,7 @@
       <li>Remove the extension, which deletes all of its storage</li>
     </ul>
     <p>
-      Projects and Gems that PortSmith created belong to your Claude or Gemini account. Delete them there if you no longer want them.
+      Projects and Gems that PortSmith created belong to your ChatGPT, Claude or Gemini account. Delete them there if you no longer want them.
     </p>
 
     <h2>Children's privacy</h2>
@@ -272,7 +272,7 @@
     </p>
 
     <footer>
-      <p>PortSmith v0.4.0 privacy policy. Last updated September 17, 2026.</p>
+      <p>PortSmith v0.5.0 privacy policy. Last updated October 30, 2026.</p>
     </footer>
   </div>
 </body>
