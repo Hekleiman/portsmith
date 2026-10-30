@@ -1,4 +1,4 @@
-# Chrome Web Store Listing: PortSmith (v0.4.0)
+# Chrome Web Store Listing: PortSmith (v0.5.0)
 
 ## Extension Name
 
@@ -38,9 +38,9 @@ WHERE IT CAN GO
 
 - Into Claude, automatically: PortSmith creates each project, sets the instructions, uploads the files and adds the project memory, then checks the result
 - Into Gemini, automatically: PortSmith creates each Gem and adds the files and project memory to its knowledge
-- Into ChatGPT, step by step: PortSmith shows each step with copy and download buttons
+- Into ChatGPT, automatically: PortSmith creates each project, sets the instructions and adds the files and project memory to its Sources
 
-Your saved memories and custom instructions go into Gemini automatically (as "Your instructions for Gemini"), or through Claude's own memory import in one paste.
+Your saved memories and custom instructions go into Gemini automatically (as "Your instructions for Gemini"), or through Claude's own memory import in one paste. Into ChatGPT, memories and custom instructions are added step by step.
 
 HOW IT WORKS
 
@@ -71,25 +71,17 @@ GOOD TO KNOW
 
 ---
 
-## What's New in v0.4.0
+## What's New in v0.5.0
 
 > Paste into the CWS "Changes in this version" field.
 
 ```
-- Fixed: projects and Gems could be created twice
-- Fixed: Claude projects came through without their instructions
-- Fixed: knowledge file uploads to Claude
-- Fixed: instruction adjustments could change their meaning
-- New: project memory moves with each project
-- New: knowledge files and project memory go into Gems automatically
-- New: memories and custom instructions are saved to Gemini automatically
-- New: memories and custom instructions go through Claude's and Gemini's memory import
-- New: when Claude is the source, your memory outside projects and your "Instructions for Claude" can come along too
-- New: step-by-step migration into ChatGPT
-- New: files the target can't take are offered as downloads
-- New: resuming never duplicates work, and Stop stops right away
-- New: a results page that matches your target, with a "Delete saved data" button
-- Fewer permissions, and proper icons
+- New: automatic migration into ChatGPT: projects, instructions, files and project memory
+- New: names and instructions longer than ChatGPT allows are shortened, and the full instructions are kept as a project file
+- Fixed: ChatGPT projects and custom GPTs were not found, so extraction stopped with nothing to migrate
+- Fixed: PortSmith reported "Not logged in to ChatGPT" on a signed-in account
+- Improved: reading from ChatGPT works from any ChatGPT page
+- Improved: files too large to pass through the extension are listed for manual upload instead of failing
 ```
 
 ---
