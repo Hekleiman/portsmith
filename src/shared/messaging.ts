@@ -9,6 +9,12 @@ import type {
 } from "@/core/adapters/claude-dom-types";
 import type { GemExtractionResult } from "@/core/adapters/gemini-dom-types";
 import type { GemConfig, GemImportResult } from "@/core/adapters/gemini-import-types";
+import type {
+  ChatGPTCreateResult,
+  ChatGPTProjectConfig,
+  ChatGPTUploadRequest,
+  ChatGPTUploadResult,
+} from "@/core/adapters/chatgpt-import-types";
 
 // ─── Placeholder Types (move to dedicated modules when implemented) ──
 
@@ -450,6 +456,21 @@ export interface MessageMap {
     request: { gemId: string };
     response: GemImportResult;
   };
+  /** Create a ChatGPT project with its name and instructions */
+  CHATGPT_CREATE_PROJECT: {
+    request: ChatGPTProjectConfig;
+    response: ChatGPTCreateResult;
+  };
+  /** Add one file (base64) to a ChatGPT project's Sources */
+  CHATGPT_UPLOAD_PROJECT_FILE: {
+    request: ChatGPTUploadRequest;
+    response: ChatGPTUploadResult;
+  };
+  /** IDs of the user's ChatGPT projects with this name */
+  CHATGPT_FIND_PROJECTS: {
+    request: { name: string };
+    response: { success: boolean; gizmoIds?: string[]; error?: string };
+  };
   /** Store a downloaded file blob in IndexedDB (sent from content script) */
   STORE_DOWNLOADED_FILE: {
     request: { fileId: string; blob: string; mimeType: string; fileName: string };
@@ -528,6 +549,10 @@ const MESSAGE_TIMEOUT_OVERRIDES: Partial<Record<MessageName, number>> = {
   GEMINI_SAVE_MEMORIES: 180_000,
   GEMINI_LIST_MEMORIES: 60_000,
   FETCH_GIZMO_API: 30_000,
+  CHATGPT_CREATE_PROJECT: 60_000,
+  // Four requests, one of them the raw bytes, then server-side indexing
+  CHATGPT_UPLOAD_PROJECT_FILE: 180_000,
+  CHATGPT_FIND_PROJECTS: 60_000,
 };
 
 /** Resolve the timeout used for a given message. */
