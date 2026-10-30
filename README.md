@@ -21,11 +21,11 @@ Six directions, between every pair of platforms. Same-platform migrations are bl
 | From \ To | Claude | Gemini | ChatGPT |
 |---|---|---|---|
 | ChatGPT | Automated | Automated | n/a |
-| Claude | n/a | Automated | Guided |
-| Gemini | Automated | n/a | Guided |
+| Claude | n/a | Automated | Automated |
+| Gemini | Automated | n/a | Automated |
 
 - **Into Claude and Gemini (4 directions): fully automated.** PortSmith creates each project or Gem, sets the instructions, uploads the files and adds project memory. Anything it can't do becomes a manual card with the text to copy and the files to download.
-- **Into ChatGPT (2 directions): guided.** There is no automated ChatGPT importer yet, so PortSmith walks you through each step with copy and download buttons.
+- **Into ChatGPT (2 directions): automated for projects, instructions and files, guided for memory.** PortSmith creates each project, sets the instructions and adds the files and project memory to its Sources. Memory and custom instructions are added with guided steps, with copy buttons. ChatGPT caps project names at 50 characters and instructions at 8,000, so longer ones are shortened and the full instructions go into the project as a file.
 
 For automated targets you can also pick guided mode, or a hybrid that asks for confirmation before each item.
 
@@ -79,6 +79,8 @@ E2E scripts stub the three sites with Playwright routes and never touch real acc
 npm i --no-save playwright && npx playwright install chromium
 node scripts/e2e-duplicate-dispatch.mjs dist
 node scripts/e2e-claude-autofill.mjs dist
+node scripts/e2e-gemini-autofill.mjs dist
+node scripts/e2e-chatgpt-autofill.mjs dist
 ```
 
 ## Project layout

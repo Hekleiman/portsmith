@@ -32,16 +32,21 @@ const h = vi.hoisted(() => {
     answers: [] as Array<boolean | undefined>,
     files: new Map<string, { blob: string; mimeType: string }>(),
     savedMemory: [] as string[],
+    chatgptTabs: [{ id: 33 }] as Array<{ id: number }>,
   };
 });
 
-vi.mock("@/shared/messaging", () => ({
-  onMessage: vi.fn(() => () => undefined),
-  safeSendTabMessage: vi.fn(async (tabId: number, name: string, payload: unknown) => {
+vi.mock("@/shared/messaging", () => {
+  const send = async (tabId: number, name: string, payload: unknown): Promise<unknown> => {
     h.tabMessages.push({ tabId, name, payload });
     return h.tabResponder(name, payload);
-  }),
-}));
+  };
+  return {
+    onMessage: vi.fn(() => () => undefined),
+    safeSendTabMessage: vi.fn(send),
+    sendTabMessage: vi.fn(send),
+  };
+});
 
 vi.mock("@/core/storage/gemini-saved-memory", () => ({
   loadSavedMemoryIds: vi.fn(async () => h.savedMemory),
@@ -83,17 +88,31 @@ vi.mock("@/core/adapters/claude-autofill", () => ({
   }),
 }));
 
+const defaultQuery = async ({ url }: { url: string }) =>
+  url.includes("claude.ai")
+    ? [{ id: 11 }]
+    : url.includes("gemini")
+      ? [{ id: 22 }]
+      : url.includes("chatgpt")
+        ? h.chatgptTabs
+        : [];
+const defaultGet = async (id: number) => ({
+  id,
+  url:
+    id === 11
+      ? "https://claude.ai/projects"
+      : id === 33 || id === 77
+        ? "https://chatgpt.com/"
+        : "https://gemini.google.com/app",
+  discarded: false,
+});
 const chromeMock = {
   tabs: {
-    query: vi.fn(async ({ url }: { url: string }) =>
-      url.includes("claude.ai") ? [{ id: 11 }] : url.includes("gemini") ? [{ id: 22 }] : [],
-    ),
-    get: vi.fn(async (id: number) => ({
-      id,
-      url: id === 11 ? "https://claude.ai/projects" : "https://gemini.google.com/app",
-      discarded: false,
+    query: vi.fn(defaultQuery),
+    get: vi.fn(defaultGet),
+    create: vi.fn(async ({ url }: { url: string }) => ({
+      id: url.includes("chatgpt") ? 77 : 99,
     })),
-    create: vi.fn(async () => ({ id: 99 })),
     onRemoved: { addListener: vi.fn() },
   },
 };
@@ -208,7 +227,11 @@ beforeEach(() => {
   h.answers.length = 0;
   h.files.clear();
   h.savedMemory = [];
+  h.chatgptTabs = [{ id: 33 }];
   h.tabResponder = geminiTab();
+  // Some tests swap these out; every test starts from the defaults.
+  chromeMock.tabs.query.mockImplementation(defaultQuery as never);
+  chromeMock.tabs.get.mockImplementation(defaultGet as never);
   h.autofillScript = created;
   vi.clearAllMocks();
 });
@@ -445,21 +468,21 @@ describe("MigrationOrchestrator: outcomes", () => {
   });
 });
 
-describe("MigrationOrchestrator: ChatGPT target", () => {
-  it("always uses the guided ChatGPT flow", async () => {
+describe("MigrationOrchestrator: ChatGPT guided", () => {
+  it("uses the guided ChatGPT flow in guided mode", async () => {
     putManifest("m1", [ws("a")], {
       source: { platform: "claude", exportMethod: "api", exportedAt: "2026-09-01T00:00:00.000Z" },
     });
     const o = new MigrationOrchestrator();
-    await o.start("m1", "autofill", ["a"], "chatgpt");
+    await o.start("m1", "guided", ["a"], "chatgpt");
     await waitFor(() => o.getStatus().guidedInstructions !== null);
     const status = o.getStatus();
     expect(status.mode).toBe("guided");
     expect(status.targetPlatform).toBe("chatgpt");
     const text = JSON.stringify(status.guidedInstructions);
-    expect(text).toContain("New project");
+    expect(text).toContain('click the + next to \\"Projects\\"');
     expect(text).not.toMatch(/claude\.ai/);
-    expect(h.autofillCalls).toEqual([]);
+    expect(h.tabMessages).toEqual([]);
 
     expect(o.markWorkspaceDone("a")).toBe(true);
     await waitFor(() => o.getStatus().phase === "complete");
@@ -1147,5 +1170,333 @@ describe("MigrationOrchestrator: Gemini saved-memory store", () => {
     await finishGeminiRun(o);
     expect(h.tabMessages.some((m) => m.name === "GEMINI_SAVE_MEMORIES")).toBe(false);
     expect(o.getStatus().memoryAutoSaved).toEqual({ saved: 2, total: 2 });
+  });
+});
+
+// ─── ChatGPT target ─────────────────────────────────────────
+
+/** ChatGPT tab: lists `projects`, and creates new ones unless told otherwise. */
+function chatgptTab(
+  projects: Array<{ id: string; name: string }> = [],
+  options: {
+    create?: (payload: { name: string; instructions: string }) => unknown;
+    upload?: (fileName: string) => unknown;
+  } = {},
+) {
+  const key = (n: string): string => n.trim().replace(/\s+/g, " ").toLowerCase();
+  return (name: string, payload: unknown): unknown => {
+    if (name === "PING") return { pong: true };
+    if (name === "CHATGPT_FIND_PROJECTS") {
+      const wanted = key((payload as { name: string }).name);
+      return { success: true, gizmoIds: projects.filter((p) => key(p.name) === wanted).map((p) => p.id) };
+    }
+    if (name === "CHATGPT_CREATE_PROJECT") {
+      const req = payload as { name: string; instructions: string };
+      if (options.create) return options.create(req);
+      const id = `g-p-${String(projects.length + 1).padStart(32, "0")}`;
+      projects.push({ id, name: req.name });
+      return { success: true, gizmoId: id };
+    }
+    if (name === "CHATGPT_UPLOAD_PROJECT_FILE") {
+      const fileName = (payload as { fileName: string }).fileName;
+      return options.upload?.(fileName) ?? { success: true, fileId: `file_${fileName}` };
+    }
+    return { success: true };
+  };
+}
+
+const GIZMO_1 = `g-p-${"0".repeat(31)}1`;
+const fromClaude = {
+  source: { platform: "claude" as const, exportMethod: "api" as const, exportedAt: "2026-09-01T00:00:00.000Z" },
+};
+const sent = (name: string) => h.tabMessages.filter((m) => m.name === name);
+const uploadedNames = () =>
+  sent("CHATGPT_UPLOAD_PROJECT_FILE").map((m) => (m.payload as { fileName: string }).fileName);
+
+describe("MigrationOrchestrator: ChatGPT target", () => {
+  it("creates the project and adds the memory document and files to its Sources", async () => {
+    putManifest("m1", [withKnowledge("a", ["one.txt", "two.txt"], true)], fromClaude);
+    h.tabResponder = chatgptTab();
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "autofill", ["a"], "chatgpt");
+    await waitFor(() => o.getStatus().phase === "complete");
+
+    expect(sent("CHATGPT_CREATE_PROJECT").map((m) => m.payload)).toEqual([
+      { name: "Workspace a", instructions: "Instructions for a" },
+    ]);
+    expect(uploadedNames()).toEqual(["project-memory-from-claude.md", "one.txt", "two.txt"]);
+    expect(sent("CHATGPT_UPLOAD_PROJECT_FILE").every((m) => (m.payload as { gizmoId: string }).gizmoId === GIZMO_1)).toBe(true);
+    expect(h.tabMessages.every((m) => m.tabId === 33)).toBe(true);
+    const status = o.getStatus();
+    expect(status.mode).toBe("autofill");
+    expect(status.completedWorkspaceIds).toEqual(["a"]);
+    expect(status.instructionsDelivery.a).toBe("autofilled");
+    expect(status.filesDelivered.a).toBe(2);
+    expect(status.projectMemoryWorkspaceIds).toEqual(["a"]);
+    expect(status.knowledgeLeftovers).toEqual({});
+    // "About a" has nowhere to go in ChatGPT: a note and a card for it.
+    expect(status.followUps.a).toEqual([expect.stringContaining("no description field")]);
+    expect(status.leftoverSteps.a?.[0]?.copyBlocks).toEqual([{ label: "Description", content: "About a" }]);
+    expect(h.answers).toEqual([]);
+    expect(status.pendingConfirmStepId).toBeNull();
+    expect(h.checkpoints.some((c) => c.state.createdWorkspaceIds?.includes("a"))).toBe(true);
+  });
+
+  it("opens a ChatGPT tab in the background and waits for it to answer", async () => {
+    h.chatgptTabs = [];
+    putManifest("m1", [ws("a")]);
+    h.tabResponder = chatgptTab();
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "autofill", ["a"], "chatgpt");
+    await waitFor(() => o.getStatus().phase === "complete");
+    expect(chromeMock.tabs.create).toHaveBeenCalledWith({ url: "https://chatgpt.com/", active: false });
+    expect(h.tabMessages[0]).toEqual(expect.objectContaining({ tabId: 77, name: "PING" }));
+    expect(o.getStatus().completedWorkspaceIds).toEqual(["a"]);
+  });
+
+  it("notes extra ChatGPT tabs like the other targets", async () => {
+    h.chatgptTabs = [{ id: 33 }, { id: 34 }];
+    putManifest("m1", [ws("a")]);
+    h.tabResponder = chatgptTab();
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "autofill", ["a"], "chatgpt");
+    expect(o.getStatus().duplicateTabWarning).toContain("2 ChatGPT tabs are open");
+  });
+
+  it("asks before each project in hybrid mode and respects a skip", async () => {
+    putManifest("m1", [ws("a")]);
+    h.tabResponder = chatgptTab();
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "hybrid", ["a"], "chatgpt");
+    await waitFor(() => o.getStatus().pendingConfirmStepId === "a-create");
+    const step = o.getStatus().currentSteps[0];
+    expect(step?.title).toBe('Create the project "Workspace a"?');
+    expect(step?.confirmLabel).toBe("Create project");
+    o.confirmStep(false, token(o));
+    await waitFor(() => o.getStatus().phase === "complete");
+    expect(sent("CHATGPT_CREATE_PROJECT")).toHaveLength(0);
+    expect(o.getStatus().manualWorkspaces).toEqual([{ id: "a", name: "Workspace a", reason: "Skipped" }]);
+  });
+
+  it("skips a taken name without asking in automatic mode", async () => {
+    putManifest("m1", [ws("a"), ws("b")]);
+    h.tabResponder = chatgptTab([{ id: `g-p-${"f".repeat(32)}`, name: "workspace  A" }]);
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "autofill", ["a", "b"], "chatgpt");
+    await waitFor(() => o.getStatus().phase === "complete");
+    expect(sent("CHATGPT_CREATE_PROJECT").map((m) => (m.payload as { name: string }).name)).toEqual(["Workspace b"]);
+    const status = o.getStatus();
+    expect(status.completedWorkspaceIds).toEqual(["b"]);
+    expect(status.manualWorkspaces).toEqual([
+      { id: "a", name: "Workspace a", reason: "A project with this name is already in ChatGPT" },
+    ]);
+    expect(h.answers).toEqual([]);
+  });
+
+  it("asks before creating a project whose name is taken in hybrid mode", async () => {
+    putManifest("m1", [ws("a")]);
+    h.tabResponder = chatgptTab([{ id: `g-p-${"f".repeat(32)}`, name: "Workspace a" }]);
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "hybrid", ["a"], "chatgpt");
+    await waitFor(() => o.getStatus().pendingConfirmStepId === "a-create");
+    o.confirmStep(true, token(o));
+    await waitFor(() => o.getStatus().currentSteps[0]?.confirmLabel === "Create another");
+    expect(o.getStatus().currentSteps[0]?.title).toContain("already in ChatGPT");
+    o.confirmStep(true, token(o));
+    await waitFor(() => o.getStatus().phase === "complete");
+    expect(sent("CHATGPT_CREATE_PROJECT")).toHaveLength(1);
+    expect(o.getStatus().completedWorkspaceIds).toEqual(["a"]);
+  });
+
+  it("checks for duplicates by the trimmed name and says it was trimmed", async () => {
+    const long = "A project name that is much longer than fifty characters allows";
+    putManifest("m1", [ws("a", { name: long })]);
+    const trimmed = "A project name that is much longer than fifty…";
+    h.tabResponder = chatgptTab();
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "autofill", ["a"], "chatgpt");
+    await waitFor(() => o.getStatus().phase === "complete");
+    expect(sent("CHATGPT_FIND_PROJECTS")[0]?.payload).toEqual({ name: trimmed });
+    expect(sent("CHATGPT_CREATE_PROJECT")[0]?.payload).toEqual(expect.objectContaining({ name: trimmed }));
+    expect(o.getStatus().followUps.a).toEqual([
+      `ChatGPT allows 50 characters in a project name, so "${long}" was created as "${trimmed}"`,
+    ]);
+  });
+
+  it("shortens long instructions and uploads the full text first", async () => {
+    const paragraph = "Follow the house style. ".repeat(40).trim();
+    const long = Array.from({ length: 12 }, () => paragraph).join("\n\n");
+    expect(long.length).toBeGreaterThan(8000);
+    const workspace = withKnowledge("a", ["one.txt"], true);
+    putManifest("m1", [{ ...workspace, instructions: { raw: long } }], fromClaude);
+    h.tabResponder = chatgptTab();
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "autofill", ["a"], "chatgpt");
+    await waitFor(() => o.getStatus().phase === "complete");
+
+    const create = sent("CHATGPT_CREATE_PROJECT")[0]?.payload as { instructions: string };
+    expect([...create.instructions].length).toBeLessThanOrEqual(8000);
+    expect(create.instructions).toContain("full-instructions-from-claude.md");
+    expect(uploadedNames()).toEqual([
+      "full-instructions-from-claude.md",
+      "project-memory-from-claude.md",
+      "one.txt",
+    ]);
+    const status = o.getStatus();
+    expect(status.instructionsDelivery.a).toBe("autofilled");
+    expect(status.followUps.a).toContain(
+      "ChatGPT allows 8000 characters of instructions, so they were shortened at a paragraph break. The full text is in the project file full-instructions-from-claude.md",
+    );
+    expect(status.filesDelivered.a).toBe(1);
+  });
+
+  it("says the full instructions didn't arrive when their file fails", async () => {
+    putManifest("m1", [ws("a", { instructions: { raw: "word ".repeat(2000) } })], fromClaude);
+    h.tabResponder = chatgptTab([], {
+      upload: (fileName) =>
+        fileName.startsWith("full-instructions") ? { success: false, error: "HTTP 500", step: "process" } : undefined,
+    });
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "autofill", ["a"], "chatgpt");
+    await waitFor(() => o.getStatus().phase === "complete");
+    const status = o.getStatus();
+    expect(status.followUps.a?.[0]).toContain("The full instructions did not reach the project");
+    expect(status.knowledgeLeftovers.a).toEqual({
+      link: `https://chatgpt.com/g/${GIZMO_1}/project?tab=sources`,
+      fileNames: [],
+      projectMemory: false,
+      instructionsFile: "full-instructions-from-claude.md",
+    });
+  });
+
+  it("lists a file that failed with the Sources link and keeps going", async () => {
+    putManifest("m1", [withKnowledge("a", ["one.txt", "big.pdf"]), ws("b")]);
+    h.tabResponder = chatgptTab([], {
+      upload: (fileName) =>
+        fileName === "big.pdf" ? { success: false, error: "ChatGPT answered HTTP 413", step: "upload" } : undefined,
+    });
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "autofill", ["a", "b"], "chatgpt");
+    await waitFor(() => o.getStatus().phase === "complete");
+    const status = o.getStatus();
+    expect(status.completedWorkspaceIds).toEqual(["a", "b"]);
+    expect(status.filesDelivered.a).toBe(1);
+    expect(status.knowledgeLeftovers.a).toEqual({
+      link: `https://chatgpt.com/g/${GIZMO_1}/project?tab=sources`,
+      fileNames: ["big.pdf"],
+      projectMemory: false,
+    });
+    expect(status.followUps.a).toContain(
+      "Add 1 file to the project's Sources by hand (big.pdf: ChatGPT answered HTTP 413)",
+    );
+    expect(h.checkpoints[h.checkpoints.length - 1]!.state.knowledgeLeftovers?.a?.fileNames).toEqual(["big.pdf"]);
+  });
+
+  it("never sends a file too large for one message", async () => {
+    const workspace = withKnowledge("a", ["small.txt", "huge.zip"]);
+    workspace.knowledgeFiles[1]!.sizeBytes = 49 * 1024 * 1024;
+    putManifest("m1", [workspace]);
+    h.tabResponder = chatgptTab();
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "autofill", ["a"], "chatgpt");
+    await waitFor(() => o.getStatus().phase === "complete");
+    expect(uploadedNames()).toEqual(["small.txt"]);
+    const status = o.getStatus();
+    expect(status.knowledgeLeftovers.a?.fileNames).toEqual(["huge.zip"]);
+    expect(status.followUps.a).toContain(
+      "Add 1 file to the project's Sources by hand (huge.zip: too large to pass through the extension (over 47 MB): add it by hand)",
+    );
+  });
+
+  it("treats an unclear failure as success when the project shows up", async () => {
+    putManifest("m1", [ws("a")]);
+    const projects: Array<{ id: string; name: string }> = [];
+    h.tabResponder = chatgptTab(projects, {
+      create: (req) => {
+        projects.push({ id: GIZMO_1, name: req.name });
+        return { success: false, error: "Couldn't reach ChatGPT creating the project", maybeCreated: true };
+      },
+    });
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "autofill", ["a"], "chatgpt");
+    await waitFor(() => o.getStatus().phase === "complete");
+    expect(o.getStatus().completedWorkspaceIds).toEqual(["a"]);
+    expect(sent("CHATGPT_CREATE_PROJECT")).toHaveLength(1);
+  });
+
+  it("lists a rejected project at the end in automatic mode", async () => {
+    putManifest("m1", [ws("a")]);
+    h.tabResponder = chatgptTab([], {
+      create: () => ({ success: false, error: "The project name is too long" }),
+    });
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "autofill", ["a"], "chatgpt");
+    await waitFor(() => o.getStatus().phase === "complete");
+    expect(o.getStatus().manualWorkspaces).toEqual([
+      { id: "a", name: "Workspace a", reason: "Not created in ChatGPT (The project name is too long)" },
+    ]);
+  });
+
+  it("offers the manual route in hybrid mode when ChatGPT rejects the request", async () => {
+    putManifest("m1", [ws("a")]);
+    h.tabResponder = chatgptTab([], { create: () => ({ success: false, error: "HTTP 422" }) });
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "hybrid", ["a"], "chatgpt");
+    await waitFor(() => o.getStatus().pendingConfirmStepId === "a-create");
+    o.confirmStep(true, token(o));
+    await waitFor(() => o.getStatus().currentSteps[0]?.confirmLabel === "It's in ChatGPT now");
+    const step = o.getStatus().currentSteps[0];
+    expect(step?.fallback?.description).toContain('click the + next to "Projects"');
+    o.confirmStep(true, token(o));
+    await waitFor(() => o.getStatus().phase === "complete");
+    const status = o.getStatus();
+    expect(status.completedWorkspaceIds).toEqual(["a"]);
+    expect(status.instructionsDelivery.a).toBe("manual");
+    expect(status.createdWorkspaceIds).toEqual(["a"]);
+  });
+
+  it("marks a project whose instructions came back different as created, to check", async () => {
+    putManifest("m1", [ws("a")]);
+    h.tabResponder = chatgptTab([], {
+      create: () => ({ success: false, gizmoId: GIZMO_1, instructionsMismatch: true, error: "mismatch" }),
+    });
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "autofill", ["a"], "chatgpt");
+    await waitFor(() => o.getStatus().phase === "complete");
+    const status = o.getStatus();
+    expect(status.completedWorkspaceIds).toEqual(["a"]);
+    expect(status.createdWorkspaceIds).toEqual(["a"]);
+    expect(status.instructionsDelivery.a).toBe("manual");
+    expect(status.followUps.a?.[0]).toContain("saved different instructions");
+  });
+
+  it("never re-creates a project that was created before a restart", async () => {
+    putManifest("m1", [withKnowledge("a", ["one.txt"]), ws("b")]);
+    // Run 1 stops while uploading to "a", after "a" was created.
+    let hang = true;
+    const base = chatgptTab();
+    h.tabResponder = (name, payload) =>
+      hang && name === "CHATGPT_UPLOAD_PROJECT_FILE" ? new Promise(() => undefined) : base(name, payload);
+    const first = new MigrationOrchestrator();
+    await first.start("m1", "autofill", ["a", "b"], "chatgpt");
+    await waitFor(() => sent("CHATGPT_UPLOAD_PROJECT_FILE").length === 1, "upload");
+    const saved = h.checkpoints[h.checkpoints.length - 1]!;
+    expect(saved.state.createdWorkspaceIds).toEqual(["a"]);
+    expect(saved.workspaceIndex).toBe(0);
+
+    // The service worker restarts: a new orchestrator resumes
+    hang = false;
+    const second = new MigrationOrchestrator();
+    await expect(second.resume()).resolves.toBe(true);
+    await waitFor(() => second.getStatus().phase === "complete");
+    expect(sent("CHATGPT_CREATE_PROJECT").map((m) => (m.payload as { name: string }).name)).toEqual([
+      "Workspace a",
+      "Workspace b",
+    ]);
+    const status = second.getStatus();
+    expect(status.completedWorkspaceIds).toEqual(["b"]);
+    expect(status.manualWorkspaces).toEqual([
+      expect.objectContaining({ id: "a", reason: expect.stringContaining("stopped before it finished") }),
+    ]);
   });
 });

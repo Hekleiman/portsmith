@@ -23,7 +23,7 @@ const PLATFORMS = [
     id: "chatgpt",
     name: "ChatGPT",
     description:
-      "Step-by-step guide to set up Projects (no automatic import yet)",
+      "Creates projects with instructions and files; memory is added with guided steps",
     color: "bg-emerald-100 text-emerald-800",
     letter: "G",
   },

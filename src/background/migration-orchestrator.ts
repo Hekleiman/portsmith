@@ -7,7 +7,8 @@ import type {
   InstructionsDelivery,
   KnowledgeLeftover,
 } from "@/shared/messaging";
-import { onMessage, safeSendTabMessage } from "@/shared/messaging";
+import { onMessage, safeSendTabMessage, sendTabMessage } from "@/shared/messaging";
+import { MAX_MESSAGE_FILE_BYTES, TOO_LARGE_FOR_MESSAGE } from "@/shared/constants";
 import { autofillWorkspace } from "@/core/adapters/claude-autofill";
 import { generateInstructions } from "@/core/adapters/claude-adapter";
 import {
@@ -25,6 +26,12 @@ import {
   renderProjectMemoryMarkdown,
 } from "@/core/transform/project-memory";
 import { textToBase64 } from "@/shared/encoding";
+import {
+  CHATGPT_INSTRUCTIONS_MAX,
+  CHATGPT_PROJECT_NAME_MAX,
+  fitInstructions,
+  fitProjectName,
+} from "@/core/transform/chatgpt-limits";
 import {
   SAVED_INFO_MAX_LENGTH,
   savedInfoKey,
@@ -82,6 +89,23 @@ const GEMINI_TAB_URL = /^https:\/\/gemini\.google\.com\//;
 export function geminiAccountPath(url: string | undefined): string {
   const match = /^https:\/\/gemini\.google\.com\/u\/(\d+)(?:[/?#]|$)/.exec(url ?? "");
   return `/u/${match?.[1] ?? "0"}/`;
+}
+
+const CHATGPT_TABS = "https://chatgpt.com/*";
+const CHATGPT_TAB_URL = /^https:\/\/chatgpt\.com\//;
+const CHATGPT_HOME_URL = "https://chatgpt.com/";
+/** How long a new ChatGPT tab gets to load its content script. */
+const CHATGPT_TAB_READY_MS = 15_000;
+
+/** A ChatGPT project's Sources tab. */
+export function chatgptSourcesUrl(gizmoId: string): string {
+  return `https://chatgpt.com/g/${gizmoId}/project?tab=sources`;
+}
+
+/** Decoded size of base64 data, without decoding it. */
+function base64Bytes(base64: string): number {
+  const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
+  return Math.floor((base64.length * 3) / 4) - padding;
 }
 
 function geminiAppUrl(account: string | null): string {
@@ -506,10 +530,60 @@ export class MigrationOrchestrator {
     return null;
   }
 
+  /**
+   * The ChatGPT tab for this run. With none open, one is opened in the
+   * background and given time to load PortSmith's content script.
+   */
+  private async getChatGPTTab(): Promise<number | null> {
+    if (this.migrationTabId !== null) {
+      try {
+        const tab = await chrome.tabs.get(this.migrationTabId);
+        if (tab && CHATGPT_TAB_URL.test(tab.url ?? "")) return this.migrationTabId;
+      } catch {
+        // Tab was closed
+      }
+      this.migrationTabId = null;
+    }
+
+    const open = await this.findTab(CHATGPT_TABS);
+    if (open !== null) {
+      this.migrationTabId = open;
+      return open;
+    }
+
+    let tabId: number | null;
+    try {
+      const tab = await chrome.tabs.create({ url: CHATGPT_HOME_URL, active: false });
+      tabId = tab.id ?? null;
+    } catch {
+      return null;
+    }
+    if (tabId === null) return null;
+    this.migrationTabId = tabId;
+
+    // Poll instead of a fixed sleep: the page is ready when it answers.
+    const deadline = Date.now() + CHATGPT_TAB_READY_MS;
+    while (Date.now() < deadline) {
+      try {
+        const reply = await sendTabMessage(tabId, "PING");
+        if (reply?.pong) return tabId;
+      } catch {
+        // Still loading
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    // Requests below inject the script if it never showed up.
+    console.warn("[PortSmith] The new ChatGPT tab didn't answer within 15 seconds");
+    return tabId;
+  }
+
   private async checkDuplicateTabs(): Promise<string | null> {
-    if (this.targetPlatform === "chatgpt") return null;
     const urlPattern =
-      this.targetPlatform === "gemini" ? GEMINI_TABS : "https://claude.ai/*";
+      this.targetPlatform === "gemini"
+        ? GEMINI_TABS
+        : this.targetPlatform === "chatgpt"
+          ? CHATGPT_TABS
+          : "https://claude.ai/*";
 
     try {
       const tabs = await chrome.tabs.query({ url: urlPattern });
@@ -565,7 +639,11 @@ export class MigrationOrchestrator {
             }
             break;
           case "chatgpt":
-            await this.processGuidedWorkspace(run, workspace);
+            if (this.mode === "guided") {
+              await this.processGuidedWorkspace(run, workspace);
+            } else {
+              await this.processChatGPTAutofillWorkspace(run, workspace);
+            }
             break;
           default:
             if (this.mode === "guided") {
@@ -1264,10 +1342,18 @@ export class MigrationOrchestrator {
       if (!this.isCurrent(run)) return;
     }
     for (const file of copied) {
+      if (file.sizeBytes > MAX_MESSAGE_FILE_BYTES) {
+        failures.push(`${file.originalName}: ${TOO_LARGE_FOR_MESSAGE}`);
+        continue;
+      }
       const record = await loadFile(file.contentRef!).catch(() => undefined);
       if (!this.isCurrent(run)) return;
       if (!record?.blob) {
         failures.push(`${file.originalName}: the copied file is missing`);
+        continue;
+      }
+      if (base64Bytes(record.blob) > MAX_MESSAGE_FILE_BYTES) {
+        failures.push(`${file.originalName}: ${TOO_LARGE_FOR_MESSAGE}`);
         continue;
       }
       if (await upload(file.originalName, file.mimeType || record.mimeType, record.blob)) {
@@ -1324,6 +1410,392 @@ export class MigrationOrchestrator {
         withMemory && !memoryAdded,
         failures[0] ?? "Gemini didn't accept them",
       );
+    }
+  }
+
+  // ─── ChatGPT Target ─────────────────────────────────────
+
+  private async processChatGPTAutofillWorkspace(
+    run: number,
+    workspace: Workspace,
+  ): Promise<void> {
+    this.currentSteps = [];
+    const stepId = `${workspace.id}-create`;
+    const source = this.sourceLabel();
+    const original = getInstructionsForTarget(workspace, "chatgpt");
+    this.instructionsDelivery[workspace.id] = original.trim() ? "pending" : "none";
+    // ChatGPT refuses the whole create when either is too long.
+    const { name, trimmed } = fitProjectName(workspace.name);
+    const { instructions, overflow } = fitInstructions(original, source);
+
+    if (this.mode === "hybrid") {
+      this.updateStep({
+        id: stepId,
+        title: `Create the project "${name}"?`,
+        status: "pending",
+        confirmLabel: "Create project",
+        skipLabel: "Skip",
+      });
+      const go = await this.waitForConfirmation(stepId);
+      if (!this.isCurrent(run)) return;
+      if (!go) {
+        this.updateStep({ id: stepId, title: `Skipped "${name}"`, status: "skipped" });
+        this.addManualWorkspace(workspace, "Skipped");
+        return;
+      }
+    }
+
+    this.updateStep({
+      id: stepId,
+      title: `Checking your projects for "${name}"`,
+      status: "running",
+    });
+
+    const tabId = await this.getChatGPTTab();
+    if (!this.isCurrent(run)) return;
+
+    // Don't create a second project with the same name without asking.
+    const before = tabId === null ? null : await this.findChatGPTProjectsNamed(tabId, name);
+    if (!this.isCurrent(run)) return;
+    if (before && before.length > 0 && this.mode !== "hybrid") {
+      // Automatic runs never stop to ask: leave it for the results page.
+      this.updateStep({
+        id: stepId,
+        title: `Skipped "${name}": a project with this name is already in ChatGPT`,
+        status: "skipped",
+      });
+      this.addManualWorkspace(workspace, "A project with this name is already in ChatGPT");
+      return;
+    }
+    if (before && before.length > 0) {
+      this.updateStep({
+        id: stepId,
+        title: `A project named "${name}" is already in ChatGPT. Create another one?`,
+        status: "pending",
+        confirmLabel: "Create another",
+        skipLabel: "Skip this one",
+      });
+      const again = await this.waitForConfirmation(stepId);
+      if (!this.isCurrent(run)) return;
+      if (!again) {
+        this.updateStep({ id: stepId, title: `Skipped "${name}"`, status: "skipped" });
+        this.addManualWorkspace(workspace, "A project with this name is already in ChatGPT");
+        return;
+      }
+    }
+
+    this.updateStep({
+      id: stepId,
+      title: `Creating project "${name}"`,
+      status: "running",
+    });
+
+    let error = "";
+    let gizmoId: string | undefined;
+    let mismatch = false;
+    if (tabId === null) {
+      error = "Couldn't open a ChatGPT tab";
+    } else {
+      try {
+        const result = await safeSendTabMessage(tabId, "CHATGPT_CREATE_PROJECT", {
+          name,
+          instructions,
+        });
+        if (result.success) {
+          gizmoId = result.gizmoId;
+        } else if (result.instructionsMismatch && result.gizmoId) {
+          // The project exists; only its instructions need a look.
+          gizmoId = result.gizmoId;
+          mismatch = true;
+        } else {
+          error = result.error ?? "Unknown error";
+        }
+      } catch (err) {
+        error = err instanceof Error ? err.message : String(err);
+      }
+
+      if (error && before !== null) {
+        // The request may have gone through even though it reported a
+        // problem. Only a project that wasn't there a moment ago can be ours.
+        const after = await this.findChatGPTProjectsNamed(tabId, name);
+        const known = new Set(before);
+        const fresh = after?.filter((id) => !known.has(id)) ?? [];
+        if (fresh.length === 1) {
+          console.warn(`[PortSmith] Project create reported "${error}", but the project exists`);
+          gizmoId = fresh[0];
+          error = "";
+        }
+      }
+    }
+    if (!this.isCurrent(run)) return;
+
+    if (!error) {
+      this.updateStep({
+        id: stepId,
+        title: `Created project "${name}"`,
+        status: "success",
+        projectCreated: true,
+      });
+      if (original.trim()) {
+        this.instructionsDelivery[workspace.id] = mismatch ? "manual" : "autofilled";
+      }
+      if (gizmoId) console.log(`[PortSmith] Created ChatGPT project ${gizmoId}`);
+      await this.markCreated(run, workspace.id);
+      if (!this.isCurrent(run)) return;
+
+      if (trimmed) {
+        this.addFollowUp(
+          workspace.id,
+          `ChatGPT allows ${CHATGPT_PROJECT_NAME_MAX} characters in a project name, so "${workspace.name.trim()}" was created as "${name}"`,
+        );
+      }
+      if (mismatch) {
+        this.addFollowUp(
+          workspace.id,
+          "ChatGPT saved different instructions than PortSmith sent: open the project's settings and check them",
+        );
+      }
+      if (workspace.description.trim()) {
+        this.addFollowUp(
+          workspace.id,
+          "ChatGPT projects have no description field, so the description wasn't added. It's on a card below if you want to keep it",
+        );
+        this.addLeftoverStep(workspace.id, {
+          id: `${workspace.id}-description`,
+          title: "Keep the description (optional)",
+          description:
+            'ChatGPT projects have no description field. If it matters, open the project\'s menu (three dots), choose "Project settings" and add it to the top of the instructions.',
+          copyBlocks: [{ label: "Description", content: workspace.description.trim() }],
+          link: gizmoId ? `https://chatgpt.com/g/${gizmoId}/project` : CHATGPT_HOME_URL,
+        });
+      }
+
+      await this.addChatGPTSources(run, tabId, gizmoId, workspace, overflow, source);
+      // Only now: a restart during the uploads lists it as unfinished.
+      if (this.isCurrent(run)) this.completedWorkspaceIds.push(workspace.id);
+      return;
+    }
+
+    if (this.mode !== "hybrid") {
+      // Automatic runs keep going; the results page has the manual route.
+      const unsure = before === null;
+      this.updateStep({
+        id: stepId,
+        title: `Couldn't create "${name}". It's listed at the end`,
+        status: "failed",
+      });
+      this.addManualWorkspace(
+        workspace,
+        unsure
+          ? `ChatGPT didn't confirm the new project (${error}). Check your projects before creating it by hand`
+          : `Not created in ChatGPT (${error})`,
+      );
+      return;
+    }
+
+    // API failed: offer the manual route and wait for the user.
+    this.updateStep({
+      id: stepId,
+      title: `Couldn't create "${name}" automatically`,
+      status: "pending",
+      fallback: buildManualCreateFallback(
+        workspace,
+        "chatgpt",
+        source,
+        `ChatGPT didn't confirm the new project (${error}). Check your projects first. If "${name}" isn't there, create it by hand:`,
+      ),
+      confirmLabel: "It's in ChatGPT now",
+      skipLabel: "Skip this one",
+    });
+    const done = await this.waitForConfirmation(stepId);
+    if (!this.isCurrent(run)) return;
+    if (done) {
+      this.updateStep({ id: stepId, title: `Created "${name}" by hand`, status: "success", projectCreated: true });
+      if (original.trim()) this.instructionsDelivery[workspace.id] = "manual";
+      const note = handOverNote(
+        workspace,
+        original,
+        hasProjectMemory(workspace) ? "memory" : "",
+      );
+      this.followUps[workspace.id] = [note];
+      this.completedWorkspaceIds.push(workspace.id);
+      await this.markCreated(run, workspace.id);
+    } else {
+      this.updateStep({ id: stepId, title: `"${name}" not created`, status: "skipped" });
+      this.addManualWorkspace(workspace, `Not created in ChatGPT (${error})`);
+    }
+  }
+
+  /**
+   * Add the overflow instructions file, the project memory document and
+   * the copied files to the project's Sources, one upload each (uploads
+   * append, so nothing needs saving afterwards). Never waits for the user:
+   * whatever doesn't make it is listed on the results page.
+   */
+  private async addChatGPTSources(
+    run: number,
+    tabId: number | null,
+    gizmoId: string | undefined,
+    workspace: Workspace,
+    overflow: { fileName: string; content: string } | null,
+    source: string,
+  ): Promise<void> {
+    const copied = workspace.knowledgeFiles.filter((f) => f.contentRef);
+    const withMemory = hasProjectMemory(workspace);
+    const total = copied.length + (withMemory ? 1 : 0) + (overflow ? 1 : 0);
+    if (total === 0) return;
+
+    const stepId = `${workspace.id}-sources`;
+    const link = gizmoId ? chatgptSourcesUrl(gizmoId) : CHATGPT_HOME_URL;
+    const shortened = `ChatGPT allows ${CHATGPT_INSTRUCTIONS_MAX} characters of instructions, so they were shortened at a paragraph break`;
+    const leftover = (
+      fileNames: string[],
+      memory: boolean,
+      instructionsFile: boolean,
+      why: string,
+    ): void => {
+      if (fileNames.length === 0 && !memory && !instructionsFile) return;
+      this.knowledgeLeftovers[workspace.id] = {
+        link,
+        fileNames,
+        projectMemory: memory,
+        ...(instructionsFile && overflow ? { instructionsFile: overflow.fileName } : {}),
+      };
+      const what = [
+        ...(instructionsFile && overflow ? [overflow.fileName] : []),
+        ...(fileNames.length > 0
+          ? [`${fileNames.length} file${fileNames.length === 1 ? "" : "s"}`]
+          : []),
+        ...(memory ? ["the project memory document"] : []),
+      ].join(" and ");
+      this.addFollowUp(workspace.id, `Add ${what} to the project's Sources by hand (${why})`);
+    };
+
+    if (tabId === null || !gizmoId) {
+      this.updateStep({
+        id: stepId,
+        title: "Sources left for the end",
+        status: "skipped",
+      });
+      if (overflow) {
+        this.addFollowUp(
+          workspace.id,
+          `${shortened}. The full instructions did not reach the project: add ${overflow.fileName} from the results page`,
+        );
+      }
+      leftover(
+        copied.map((f) => f.originalName),
+        withMemory,
+        overflow !== null,
+        "PortSmith didn't get the new project's ID",
+      );
+      return;
+    }
+
+    this.updateStep({
+      id: stepId,
+      title: `Adding ${total} file${total === 1 ? "" : "s"} to the project's Sources`,
+      status: "running",
+    });
+
+    const failures: string[] = [];
+    const upload = async (fileName: string, mimeType: string, base64: string): Promise<boolean> => {
+      try {
+        const result = await safeSendTabMessage(tabId, "CHATGPT_UPLOAD_PROJECT_FILE", {
+          gizmoId,
+          fileName,
+          mimeType,
+          base64,
+        });
+        if (result.success) return true;
+        failures.push(`${fileName}: ${result.error ?? "upload failed"}`);
+      } catch (err) {
+        failures.push(`${fileName}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      return false;
+    };
+
+    let overflowAdded = false;
+    if (overflow) {
+      overflowAdded = await upload(overflow.fileName, "text/markdown", textToBase64(overflow.content));
+      if (!this.isCurrent(run)) return;
+      this.addFollowUp(
+        workspace.id,
+        overflowAdded
+          ? `${shortened}. The full text is in the project file ${overflow.fileName}`
+          : `${shortened}. The full instructions did not reach the project: add ${overflow.fileName} from the results page`,
+      );
+    }
+
+    let memoryAdded = false;
+    if (withMemory) {
+      const doc = renderProjectMemoryMarkdown(workspace, source);
+      memoryAdded = await upload(projectMemoryFileName(source), "text/markdown", textToBase64(doc));
+      if (!this.isCurrent(run)) return;
+    }
+
+    const addedFiles: string[] = [];
+    for (const file of copied) {
+      if (file.sizeBytes > MAX_MESSAGE_FILE_BYTES) {
+        failures.push(`${file.originalName}: ${TOO_LARGE_FOR_MESSAGE}`);
+        continue;
+      }
+      const record = await loadFile(file.contentRef!).catch(() => undefined);
+      if (!this.isCurrent(run)) return;
+      if (!record?.blob) {
+        failures.push(`${file.originalName}: the copied file is missing`);
+        continue;
+      }
+      if (base64Bytes(record.blob) > MAX_MESSAGE_FILE_BYTES) {
+        failures.push(`${file.originalName}: ${TOO_LARGE_FOR_MESSAGE}`);
+        continue;
+      }
+      if (await upload(file.originalName, file.mimeType || record.mimeType, record.blob)) {
+        addedFiles.push(file.originalName);
+      }
+      if (!this.isCurrent(run)) return;
+    }
+
+    if (addedFiles.length > 0) this.filesDelivered[workspace.id] = addedFiles.length;
+    if (memoryAdded && !this.projectMemoryWorkspaceIds.includes(workspace.id)) {
+      this.projectMemoryWorkspaceIds.push(workspace.id);
+    }
+    const added = addedFiles.length + (memoryAdded ? 1 : 0) + (overflowAdded ? 1 : 0);
+
+    if (added === total) {
+      this.updateStep({
+        id: stepId,
+        title: `Added ${total} file${total === 1 ? "" : "s"} to the project's Sources`,
+        status: "success",
+        filesDelivered: addedFiles.length,
+      });
+      return;
+    }
+
+    if (failures.length > 0) {
+      console.warn(`[PortSmith] Sources for "${workspace.name}": ${failures.join("; ")}`);
+    }
+    this.updateStep({
+      id: stepId,
+      title: `Added ${added} of ${total} files to the project's Sources. The rest are listed at the end`,
+      status: "fallback",
+      filesDelivered: addedFiles.length,
+    });
+    leftover(
+      copied.map((f) => f.originalName).filter((n) => !addedFiles.includes(n)),
+      withMemory && !memoryAdded,
+      overflow !== null && !overflowAdded,
+      failures[0] ?? "ChatGPT didn't accept them",
+    );
+  }
+
+  /** IDs of the user's ChatGPT projects with this name, or null if they can't be listed. */
+  private async findChatGPTProjectsNamed(tabId: number, name: string): Promise<string[] | null> {
+    try {
+      const result = await safeSendTabMessage(tabId, "CHATGPT_FIND_PROJECTS", { name });
+      return result.success ? (result.gizmoIds ?? []) : null;
+    } catch {
+      return null;
     }
   }
 

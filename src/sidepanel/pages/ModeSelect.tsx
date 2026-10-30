@@ -112,6 +112,17 @@ export default function ModeSelect(): React.JSX.Element {
         if (targetPlatform === "gemini" && m.id === "hybrid") {
           return { ...m, description: "Like Autofill, but asks before creating each Gem." };
         }
+        if (targetPlatform === "chatgpt" && m.id === "autofill") {
+          return {
+            ...m,
+            description:
+              "PortSmith creates each project through ChatGPT's API and adds the files to its Sources.",
+            cons: ["Needs a ChatGPT tab (opened for you)"],
+          };
+        }
+        if (targetPlatform === "chatgpt" && m.id === "hybrid") {
+          return { ...m, description: "Like Autofill, but asks before creating each project." };
+        }
         return m;
       }),
     [targetPlatform],
