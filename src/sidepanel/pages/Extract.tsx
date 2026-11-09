@@ -6,6 +6,7 @@ import {
   type ChatGPTDOMData,
 } from "@/core/transform/workspace-mapper";
 import { saveManifest } from "@/core/storage/indexed-db";
+import { gptsRetired } from "@/core/transform/gpt-backup";
 import {
   safeSendTabMessage,
   onMessage,
@@ -320,7 +321,9 @@ function ChatGPTExtract(): React.JSX.Element {
             "complete",
             gptCount > 0
               ? `${gptCount} GPT${gptCount === 1 ? "" : "s"} found`
-              : "No custom GPTs found",
+              : gptsRetired()
+                ? "No custom GPTs found (OpenAI retired them on Dec 11)"
+                : "No custom GPTs found",
           );
           stepIdx++;
 

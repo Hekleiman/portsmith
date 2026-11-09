@@ -71,6 +71,24 @@ GOOD TO KNOW
 
 ---
 
+## Draft for v0.5.2 (not yet published)
+
+> Draft text only. The v0.5.2 release run publishes it and moves it into the sections above.
+
+Summary area (add as the first line of the Full Description):
+
+```
+Rescue your custom GPTs before OpenAI retires them on Dec 11
+```
+
+What's New:
+
+```
+- New: download a backup of your custom GPTs, with a skill file for each, before OpenAI retires them on Dec 11
+```
+
+---
+
 ## What's New in v0.5.1
 
 > Paste into the CWS "Changes in this version" field.

@@ -8,6 +8,7 @@ import {
   type StorageSummary,
 } from "@/core/storage/indexed-db";
 import { sendMessage } from "@/shared/messaging";
+import { gptsRetired } from "@/core/transform/gpt-backup";
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} bytes`;
@@ -139,21 +140,29 @@ export default function SourceSelect(): React.JSX.Element {
       </div>
       <div className="flex flex-col gap-2">
         {PLATFORMS.map((p) => (
-          <PlatformCard
-            key={p.id}
-            name={p.name}
-            description={p.description}
-            selected={sourcePlatform === p.id}
-            disabled={!p.enabled}
-            onClick={() => setSourcePlatform(p.id)}
-            icon={
-              <div
-                className={`flex h-10 w-10 items-center justify-center rounded-lg ${p.color}`}
-              >
-                <span className="text-lg font-bold">{p.letter}</span>
-              </div>
-            }
-          />
+          <div key={p.id}>
+            <PlatformCard
+              name={p.name}
+              description={p.description}
+              selected={sourcePlatform === p.id}
+              disabled={!p.enabled}
+              onClick={() => setSourcePlatform(p.id)}
+              icon={
+                <div
+                  className={`flex h-10 w-10 items-center justify-center rounded-lg ${p.color}`}
+                >
+                  <span className="text-lg font-bold">{p.letter}</span>
+                </div>
+              }
+            />
+            {p.id === "chatgpt" && (
+              <p className="mt-1 px-1 text-xs text-gray-500">
+                {gptsRetired()
+                  ? "OpenAI retired custom GPTs on Dec 11. Projects, memory and custom instructions still move."
+                  : "OpenAI retires custom GPTs on Dec 11. PortSmith can move each GPT's instructions and conversation starters, and save a backup."}
+              </p>
+            )}
+          </div>
         ))}
       </div>
       <SavedData />
