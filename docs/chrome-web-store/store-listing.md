@@ -1,4 +1,4 @@
-# Chrome Web Store Listing: PortSmith (v0.5.0)
+# Chrome Web Store Listing: PortSmith (v0.5.1)
 
 ## Extension Name
 
@@ -37,7 +37,7 @@ WHAT PORTSMITH MOVES
 WHERE IT CAN GO
 
 - Into Claude, automatically: PortSmith creates each project, sets the instructions, uploads the files and adds the project memory, then checks the result
-- Into Gemini, automatically: PortSmith creates each Gem and adds the files and project memory to its knowledge
+- Into Gemini: PortSmith creates each Gem automatically, with the files and project memory in its knowledge, where Gemini still offers Gems. On personal Google accounts, from Nov 17, Gemini turns Gems into skills, so PortSmith hands you a ready-made Gemini skill (with a SKILL.md file) to add by hand
 - Into ChatGPT, automatically: PortSmith creates each project, sets the instructions and adds the files and project memory to its Sources
 
 Your saved memories and custom instructions go into Gemini automatically (as "Your instructions for Gemini"), or through Claude's own memory import in one paste. Into ChatGPT, memories and custom instructions are added step by step.
@@ -71,9 +71,20 @@ GOOD TO KNOW
 
 ---
 
-## What's New in v0.5.0
+## What's New in v0.5.1
 
 > Paste into the CWS "Changes in this version" field.
+
+```
+- New: Gemini is turning Gems into skills on Nov 17. On personal Google accounts, PortSmith now gives you a ready-made skill to add, with a SKILL.md file
+- Fixed: files in ChatGPT projects weren't copied, so each one had to be uploaded by hand
+```
+
+---
+
+## What's New in v0.5.0 (previous release)
+
+> Kept for reference. Not for this submission.
 
 ```
 - New: automatic migration into ChatGPT: projects, instructions, files and project memory

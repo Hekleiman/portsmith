@@ -1,6 +1,6 @@
-# Chrome Web Store: submission sheet (v0.5.0)
+# Chrome Web Store: submission sheet (v0.5.1)
 
-Everything the dashboard asks for, in the order the dashboard asks for it. Written 2026-10-30 for 0.5.0. The live package is 0.4.0; 0.4.1 was never published, so this release carries the 0.4.1 ChatGPT extraction fix as well as automatic import into ChatGPT.
+Everything the dashboard asks for, in the order the dashboard asks for it. Written 2026-11-09 for 0.5.1. The live package is 0.5.0. This release has to clear review before 2026-11-17, when Gemini starts turning Gems into skills on personal Google accounts. It carries the Gemini skill route (PR #8) and a fix for ChatGPT project files, which 0.5.0 failed to copy.
 
 ## The item
 
@@ -9,57 +9,55 @@ Everything the dashboard asks for, in the order the dashboard asks for it. Writt
 | Item name | PortSmith |
 | Item ID | `jgicdjjebakiobiehdfdbgkfknkidhcd` |
 | Publisher account | Hekleiman@gmail.com (contact address confirmed 2026-03-01) |
-| Package | `portsmith-v0.5.0.zip`, 227,756 bytes, sha256 `ced06cdeeb9672e31f12a8575f1583f365e9d6ad0a3ddb981914ea4f5c51394e` |
-| Built from | `release/v0.5.0`: `main` at `9c33ad8` plus the 0.5.0 version bump (`cc9e33f`) in `manifest.json`, `package.json`, `package-lock.json` and `src/shared/constants.ts`. Clean `dist/` (34 files, 38 zip entries), `.vite/` build metadata excluded |
-| Copy for upload | `~/Desktop/portsmith-v0.5.0.zip` (same sha256) |
-| Live package | 0.4.0, the CRX served by the store, downloaded 2026-10-30 |
+| Package | `portsmith-v0.5.1.zip`, 229,550 bytes, sha256 `57ed17d5406a8f154fd29cab1ef4a3d4f6d746588c6d8b4f2880e82471319e2c` |
+| Built from | `release/v0.5.1`: `main` at `7db9699` (PR #8, Gemini skill route), the ChatGPT file fix (`fix(chatgpt): download knowledge files by file_id`) and the 0.5.1 version bump in `manifest.json`, `package.json`, `package-lock.json` and `src/shared/constants.ts`. Clean `dist/` (35 files, 39 zip entries), `.vite/` build metadata excluded |
+| Copy for upload | `~/Desktop/portsmith-v0.5.1.zip` (same sha256, checked) |
+| Live package | 0.5.0, the CRX served by the store, downloaded 2026-11-09 |
 
 ## Package verification
 
-Run against `portsmith-v0.5.0.zip` itself, not against `dist/`.
+Run against `portsmith-v0.5.1.zip` itself, not against `dist/`.
 
 | Check | Result |
 |---|---|
-| Manifest version inside the zip | 0.5.0 |
-| Zip entries / files | 38 / 34 (0.4.x: 34 / 30; the new files are the ChatGPT importer and its shared chunks) |
+| Manifest version inside the zip | 0.5.1 |
+| Zip entries / files | 39 / 35 (0.5.0: 38 / 34; the new file is the Gemini `skill-package` chunk) |
 | `.vite` entries | 0 |
-| Paths referenced by `manifest.json` | 29 referenced, **0 missing** |
+| Paths referenced by `manifest.json` | 30 referenced, **0 missing** |
 | Zip file list vs `dist/` | identical both ways, 0 extra, 0 absent |
-| Side panel HTML's own references | 8 referenced, 0 broken |
-| Version baked into the bundle | `0.5.0` in `manifest.json` and the shared constants chunk; **no stale `0.4.0` or `0.4.1` anywhere** in the package |
+| Side panel HTML's own references | 9 referenced, 0 broken |
+| Version baked into the bundle | `0.5.1` in `manifest.json` and the shared constants chunk; **no stale `0.5.0`, `0.4.0` or `0.4.1` anywhere** in the package |
 
-## Manifest diff vs live 0.4.0
+## Manifest diff vs live 0.5.0
 
 The check that matters for an auto-update: when 0.3.0 updated to 0.4.0, Chrome disabled the
-extension until the user accepted added permissions. The live CRX was downloaded from the
-store, its CRX3 header stripped (12 bytes plus the header length stored at bytes 8 to 12),
-and its manifest compared against the one in this package.
+extension until the user accepted added permissions. The live 0.5.0 CRX was downloaded from
+the store on 2026-11-09 (HTTP 200, 233,181 bytes, `Cr24` magic, CRX3), its header stripped
+(12 bytes plus the 1,309-byte header length stored little-endian at bytes 8 to 12), and its
+manifest compared against the one inside `portsmith-v0.5.1.zip`.
 
-| Field | Live 0.4.0 | New 0.5.0 | Added |
+| Field | Live 0.5.0 | New 0.5.1 | Added |
 |---|---|---|---|
 | `permissions` | storage, sidePanel, scripting | storage, sidePanel, scripting | none |
 | `host_permissions` | chatgpt.com, claude.ai, gemini.google.com | chatgpt.com, claude.ai, gemini.google.com | none |
-| `content_scripts[].matches` | chatgpt.com, claude.ai x2, gemini.google.com x2 | chatgpt.com x2, claude.ai x2, gemini.google.com x2 | none (one more entry on a host already granted) |
+| `content_scripts[].matches` | chatgpt.com x2, claude.ai x2, gemini.google.com x2 | chatgpt.com x2, claude.ai x2, gemini.google.com x2 | none |
+| `web_accessible_resources[].matches` | chatgpt.com, claude.ai, gemini.google.com | chatgpt.com, claude.ai, gemini.google.com | none |
 | `optional_permissions` | none | none | none |
 | `optional_host_permissions` | none | none | none |
 
-Beyond the table, the full manifest diff shows only the version string, the new ChatGPT
-importer content-script entry, content-hashed bundle filenames, and the `update_url` the store
-injects into the live copy. No permission or host is added, so 0.5.0 will not disable the
-extension on update.
+Beyond the table, the full manifest diff shows only the version string, content-hashed
+bundle filenames, one new resource (`assets/skill-package-*.js`) in the existing
+gemini.google.com web-accessible entry, and the `update_url` the store injects into the live
+copy. No permission or host is added, so 0.5.1 will not disable the extension on update.
 
 ## Changes in this version
 
 > Paste into the CWS "Changes in this version" field. The same text is in `store-listing.md`
-> under "What's New in v0.5.0".
+> under "What's New in v0.5.1".
 
 ```
-- New: automatic migration into ChatGPT: projects, instructions, files and project memory
-- New: names and instructions longer than ChatGPT allows are shortened, and the full instructions are kept as a project file
-- Fixed: ChatGPT projects and custom GPTs were not found, so extraction stopped with nothing to migrate
-- Fixed: PortSmith reported "Not logged in to ChatGPT" on a signed-in account
-- Improved: reading from ChatGPT works from any ChatGPT page
-- Improved: files too large to pass through the extension are listed for manual upload instead of failing
+- New: Gemini is turning Gems into skills on Nov 17. On personal Google accounts, PortSmith now gives you a ready-made skill to add, with a SKILL.md file
+- Fixed: files in ChatGPT projects weren't copied, so each one had to be uploaded by hand
 ```
 
 ## Permission evidence, unchanged since 0.4.0
@@ -67,9 +65,9 @@ extension on update.
 The 2026-03-03 review rejected version 0.1.0 for Use of Permissions, reference ID
 **Purple Potassium**, routing ID FZSL: "Requesting but not using the following
 permission(s): storage." That was a correct call at the time. It was addressed in 0.4.0 and
-nothing below changed in 0.5.0, but it is kept here in case a reviewer revisits it.
+nothing below changed in 0.5.0 or 0.5.1, but it is kept here in case a reviewer revisits it.
 
-Each permission, with the shipped call that uses it, re-checked in the 0.5.0 bundle and not only in source:
+Each permission, with the shipped call that uses it, re-checked in the 0.5.0 bundle and not only in source (0.5.1 adds no permission; see the manifest diff above):
 
 | Permission | Shipped call | Reached by |
 |---|---|---|
@@ -84,8 +82,8 @@ Each permission, with the shipped call that uses it, re-checked in the 0.5.0 bun
 | Field | Value |
 |---|---|
 | Name | PortSmith |
-| Short description | `store-listing.md` → "Short Description". 118 characters, byte-identical to `description` in `manifest.json` (checked). Unchanged. |
-| Detailed description | `store-listing.md` → "Full Description". Changed for 0.5.0: ChatGPT is now an automatic target. Paste it in full. |
+| Short description | `store-listing.md` → "Short Description". Unchanged. |
+| Detailed description | `store-listing.md` → "Full Description". Changed for 0.5.1: the "Into Gemini" line now says Gems are created automatically where Gemini still offers them, and that on personal accounts from Nov 17 PortSmith hands over a Gemini skill (with a SKILL.md file) to add by hand. Paste it in full. |
 | Category | Productivity |
 | Language | English |
 | Screenshots | Unchanged. The store does not require new shots for an update. |
@@ -93,12 +91,12 @@ Each permission, with the shipped call that uses it, re-checked in the 0.5.0 bun
 
 ## Privacy tab
 
-Unchanged from 0.4.0. Leave it as it is unless the dashboard asks about the new behaviour (PortSmith now writes projects and files to ChatGPT, as it already did to Claude and Gemini). If it does, the answer is the "What PortSmith writes" and "What PortSmith sends over the network" sections of the privacy policy.
+Unchanged from 0.5.0. Data handling did not change: the ChatGPT fix reads the same files from the same endpoint with a different ID, and the SKILL.md file is built in the browser and saved by the user. The privacy policy was not edited for this release, so it still reads "version 0.5.0"; that is expected.
 
 | Field | Value |
 |---|---|
 | Single purpose | `screenshot-checklist.md` → "Fields to paste into the dashboard" |
-| `storage` justification | `permission-justifications.md` → `storage`. Lead with the call sites; this is the permission that was rejected. |
+| `storage` justification | `permission-justifications.md` → `storage`. Lead with the call sites; this is the permission that was rejected in March. |
 | `sidePanel` justification | `permission-justifications.md` → `sidePanel` |
 | `scripting` justification | `permission-justifications.md` → `scripting` |
 | Host justifications | `permission-justifications.md`, one block each for chatgpt.com, claude.ai and gemini.google.com |
@@ -122,24 +120,19 @@ Certifications, all three can be signed:
 
 ## Dashboard checklist
 
-- [ ] Release PR merged into `main`. The privacy policy is served from `main:/docs`, so it is
-      stale until then. Reload https://hekleiman.github.io/portsmith/privacy-policy.html and
-      confirm it says "version 0.5.0" and that the ChatGPT bullet under "What PortSmith writes"
-      describes creating projects.
-- [ ] **Package tab:** upload `~/Desktop/portsmith-v0.5.0.zip`. After it processes, the
-      dashboard should show version 0.5.0.
+- [ ] Release PR merged into `main`.
+- [ ] **Package tab:** upload `~/Desktop/portsmith-v0.5.1.zip`. After it processes, the
+      dashboard should show version 0.5.1.
 - [ ] **Store listing tab:** paste the full description from `store-listing.md`, and paste
       "Changes in this version" from the block above if the field is offered.
-- [ ] **Privacy tab:** unchanged, unless the dashboard asks about the new behaviour (see
-      "Privacy tab" above).
-- [ ] Test items removed from the test accounts: ChatGPT projects, Claude projects and Gemini
-      Gems named "PortSmith test ... (delete me)" or left over from test runs.
-- [ ] **Submit for review.**
+- [ ] **Privacy tab:** unchanged.
+- [ ] **Submit for review.** Review has to finish before 2026-11-17 for the skill route to
+      reach users when Gems switch.
 
 ## Known risks, in order
 
-1. **A second Use of Permissions review.** A reviewer re-checking a prior violation looks harder. The justification names files and line numbers, which is what closes that.
-2. **New write behaviour on ChatGPT.** PortSmith now creates projects and uploads files in the user's ChatGPT account, and file bytes go to an `oaiusercontent.com` upload URL that ChatGPT returns. That host is not in `host_permissions`: the ChatGPT content script sends a plain `fetch` PUT with `credentials: "omit"` and no bearer token to the signed URL ChatGPT issued (`src/content-scripts/chatgpt/importer.ts`), much as Gemini uploads go to `content-push.googleapis.com`. The privacy policy states both.
-3. **No privacy disclosure inside the side panel.** The panel has no privacy text or policy link before it reads anything. The verbatim in-UI requirement in the Limited Use policy is scoped to web browsing activity, which PortSmith does not touch, so this is not a clear violation, but a line on the first screen with a link to the policy is cheap insurance.
-4. **ChatGPT reads and writes depend on ChatGPT's internal web API**, which is unversioned and can change without notice. The contract is written down in `docs/chatgpt-endpoints.md`.
-5. **Auto-update disabling the extension** is the failure 0.3.0 to 0.4.0 hit. Checked for this release, see "Manifest diff vs live 0.4.0". It will recur on any future release that adds a host or permission, until the hosts move to `optional_host_permissions`.
+1. **Review timing.** The skill route only helps if 0.5.1 is live by 2026-11-17. Until then the date switch in `skill-package.ts` keeps the Gem steps, so an early release changes nothing for users before the cutoff.
+2. **A second Use of Permissions review.** A reviewer re-checking the March violation looks harder. The justification names files and line numbers, which is what closes that.
+3. **ChatGPT reads and writes depend on ChatGPT's internal web API**, which is unversioned and can change without notice. The 0.5.0 file bug was exactly that: `/gizmos/{id}` returns a file `id` the download endpoint rejects, next to a `file_id` it accepts. The contract is written down in `docs/chatgpt-endpoints.md`.
+4. **Gemini's skills switch hasn't happened yet.** From Nov 17 the manual skill steps point at `gemini.google.com/customize/skills`, "Create" then "Create manually" (`src/core/adapters/gemini-guided.ts`). Those steps could not be checked against a live skills page before the switch; if the page differs, they need a follow-up.
+5. **Auto-update disabling the extension** is the failure 0.3.0 to 0.4.0 hit. Checked for this release, see "Manifest diff vs live 0.5.0". It will recur on any future release that adds a host or permission, until the hosts move to `optional_host_permissions`.
