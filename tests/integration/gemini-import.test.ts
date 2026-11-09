@@ -89,6 +89,18 @@ const sampleConfig: GemConfig = {
 
 // ─── createGem ──────────────────────────────────────────────
 
+
+/** Run with the clock set to a date, for the Gems-to-skills switch. */
+async function atDate<T>(iso: string, run: () => Promise<T>): Promise<T> {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(iso));
+  try {
+    return await run();
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 describe("createGem", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -169,7 +181,7 @@ describe("createGem", () => {
       return { ok: false, status: 404 };
     });
 
-    const result = await createGem(sampleConfig);
+    const result = await atDate("2026-11-16T09:00:00-08:00", () => createGem(sampleConfig));
 
     expect(result.success).toBe(false);
     expect(result.error).toBeDefined();
@@ -177,6 +189,27 @@ describe("createGem", () => {
     expect(result.fallback!.steps.length).toBeGreaterThan(0);
     expect(result.fallback!.steps[0]).toContain("gemini.google.com/gems/new");
     expect(result.fallback!.configData).toEqual(sampleConfig);
+  });
+
+  it("points the fallback at Gemini skills from Nov 17", async () => {
+    setupFetch(async (url) => {
+      if (url.includes("batchexecute")) {
+        return { ok: false, status: 500, statusText: "Internal Server Error" };
+      }
+      return { ok: false, status: 404 };
+    });
+
+    const result = await atDate("2026-11-17T09:00:00-08:00", () =>
+      createGem({ ...sampleConfig, name: "My Special Gem" }),
+    );
+
+    const steps = result.fallback!.steps;
+    expect(steps[0]).toContain("gemini.google.com/customize/skills");
+    expect(steps[0]).toContain('"Create manually"');
+    expect(steps.some((s) => s.includes('"my-special-gem"'))).toBe(true);
+    expect(steps.some((s) => s.includes('"Add files"'))).toBe(true);
+    expect(steps.join("\n")).not.toMatch(/New Gem|Gem manager|\/gems\//);
+    expect(result.fallback!.configData.name).toBe("My Special Gem");
   });
 
   it("returns fallback when response has no gem ID", async () => {
@@ -677,11 +710,13 @@ describe("orchestrator Gemini import scenarios", () => {
       return { ok: false, status: 404 };
     });
 
-    const result = await createGem({
-      name: "My Special Gem",
-      description: "Important",
-      instructions: "Do the thing",
-    });
+    const result = await atDate("2026-11-16T09:00:00-08:00", () =>
+      createGem({
+        name: "My Special Gem",
+        description: "Important",
+        instructions: "Do the thing",
+      }),
+    );
 
     expect(result.success).toBe(false);
     expect(result.fallback!.steps.some((s) => s.includes("My Special Gem"))).toBe(

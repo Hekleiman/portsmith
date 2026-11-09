@@ -22,6 +22,14 @@ import {
   fitInstructions,
   fitProjectName,
 } from "@/core/transform/chatgpt-limits";
+import {
+  GEMINI_SKILLS_URL,
+  geminiUsesSkills,
+  renderSkillMd,
+  skillDescription,
+  skillFileName,
+  toSkillName,
+} from "@/core/transform/skill-package";
 
 const CREATE_STEPS: Record<PlatformId, { link: string; steps: string[] }> = {
   claude: {
@@ -51,6 +59,54 @@ const CREATE_STEPS: Record<PlatformId, { link: string; steps: string[] }> = {
     ],
   },
 };
+
+/** Gemini's route once personal accounts make skills instead of Gems. */
+const GEMINI_SKILL_STEPS: { link: string; steps: string[] } = {
+  link: GEMINI_SKILLS_URL,
+  steps: [
+    'Open Skills in Gemini, click "Create" and choose "Create manually".',
+    "Paste the name, description and instructions.",
+    'Click "Add files" and add the files and the project memory document.',
+    'Click "Create".',
+  ],
+};
+
+/** The create steps for a target, on the date given. */
+export function createStepsFor(
+  target: PlatformId,
+  now: Date = new Date(),
+): { link: string; steps: string[] } {
+  if (target === "gemini" && geminiUsesSkills(now)) return GEMINI_SKILL_STEPS;
+  return CREATE_STEPS[target];
+}
+
+/** Every file a skill would reference: knowledge files and project memory. */
+function skillFileNames(workspace: Workspace, sourceLabel: string): string[] {
+  return [
+    ...workspace.knowledgeFiles.map((f) => f.originalName),
+    ...(hasProjectMemory(workspace) ? [projectMemoryFileName(sourceLabel)] : []),
+  ];
+}
+
+/** SKILL.md for a workspace, as a download. */
+export function buildSkillDownload(
+  workspace: Workspace,
+  sourceLabel: string,
+  instructions: string = getInstructionsForTarget(workspace, "gemini"),
+): StepDownload {
+  return {
+    label: `SKILL.md for "${workspace.name}"`,
+    fileName: skillFileName(workspace.name),
+    mimeType: "text/markdown",
+    content: renderSkillMd({
+      name: workspace.name,
+      description: workspace.description,
+      instructions,
+      fileNames: skillFileNames(workspace, sourceLabel),
+      sourceLabel,
+    }),
+  };
+}
 
 /**
  * The name and instructions to paste into a target, fitted to its limits.
@@ -137,11 +193,16 @@ export function buildManualCreateFallback(
   target: PlatformId,
   sourceLabel: string,
   reason?: string,
+  now: Date = new Date(),
 ): MigrationStepFallback {
-  const plan = CREATE_STEPS[target];
+  const plan = createStepsFor(target, now);
+  const skill = target === "gemini" && geminiUsesSkills(now);
   const fit = fitForTarget(workspace, target, sourceLabel);
   const instructions = fit.instructions;
-  const description = workspace.description.trim();
+  // A skill needs a description, so the skill route always offers one.
+  const description = skill
+    ? skillDescription(workspace.name, workspace.description, sourceLabel)
+    : workspace.description.trim();
   const referenced = workspace.knowledgeFiles.filter((f) => !f.contentRef);
   const notes = fitNotes(fit);
 
@@ -160,16 +221,21 @@ export function buildManualCreateFallback(
 
   return {
     id: `${workspace.id}-manual-create`,
-    title: `Create "${workspace.name}" in ${platformLabel(target)} by hand`,
+    title: skill
+      ? `Create "${workspace.name}" as a Gemini skill by hand`
+      : `Create "${workspace.name}" in ${platformLabel(target)} by hand`,
     description: lines.join("\n"),
     copyBlocks: [
-      { label: "Name", content: fit.name },
+      { label: "Name", content: skill ? toSkillName(fit.name) : fit.name },
       ...(description ? [{ label: "Description", content: description }] : []),
       ...(instructions.trim()
         ? [{ label: "Instructions", content: instructions }]
         : []),
     ],
     downloads: [
+      ...(target === "gemini"
+        ? [buildSkillDownload(workspace, sourceLabel, instructions)]
+        : []),
       ...(fit.overflow ? [fit.overflow] : []),
       ...buildDownloads(workspace, sourceLabel),
     ],

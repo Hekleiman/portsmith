@@ -34,6 +34,12 @@ import {
   SAVED_INFO_API_MAX_LENGTH,
   type SavedInfoEntry,
 } from "./saved-info";
+import {
+  GEMINI_SKILLS_URL,
+  geminiUsesSkills,
+  skillDescription,
+  toSkillName,
+} from "@/core/transform/skill-package";
 
 // ─── RPC Constants ──────────────────────────────────────────
 
@@ -119,7 +125,23 @@ function buildDeletePayload(gemId: string): string {
 
 // ─── Guided Fallback ────────────────────────────────────────
 
-function buildCreateFallback(config: GemConfig): GemImportFallback {
+function buildCreateFallback(
+  config: GemConfig,
+  now: Date = new Date(),
+): GemImportFallback {
+  if (geminiUsesSkills(now)) {
+    return {
+      steps: [
+        `1. Go to ${GEMINI_SKILLS_URL}, click "Create" and choose "Create manually".`,
+        `2. Paste the name: "${toSkillName(config.name)}"`,
+        `3. Paste the description: "${skillDescription(config.name, config.description, "your previous assistant")}"`,
+        "4. Paste the instructions into the Instructions field.",
+        '5. Click "Add files" and add the files and the project memory document.',
+        '6. Click "Create".',
+      ],
+      configData: config,
+    };
+  }
   return {
     steps: [
       "1. Go to https://gemini.google.com/gems/new",

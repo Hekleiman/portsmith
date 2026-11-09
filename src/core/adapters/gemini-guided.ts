@@ -14,7 +14,13 @@ import type {
 import { getInstructionsForTarget, platformLabel } from "@/core/platforms";
 import { hasProjectMemory } from "@/core/transform/project-memory";
 import { renderMemoryImportText } from "@/core/transform/memory-export";
-import { buildDownloads } from "./manual-fallback";
+import {
+  GEMINI_SKILLS_URL,
+  geminiUsesSkills,
+  skillDescription,
+  toSkillName,
+} from "@/core/transform/skill-package";
+import { buildDownloads, buildSkillDownload } from "./manual-fallback";
 
 export const GEMINI_GEM_MANAGER_URL = "https://gemini.google.com/gems/view";
 
@@ -33,6 +39,8 @@ export interface GemKnowledgeStepOptions {
    * project memory document does. Omit to list everything.
    */
   remaining?: { fileNames: string[]; projectMemory: boolean };
+  /** Word the step for the skill editor instead of a Gem */
+  skill?: boolean;
 }
 
 /** Step for adding copied files and project memory to a Gem's Knowledge. */
@@ -56,9 +64,11 @@ export function buildGemKnowledgeStep(
   if (downloads.length === 0 && notCopied.length === 0) return null;
 
   const lines = [
-    options.link
-      ? 'Open the Gem, click the "+" under "Knowledge" and add the files below, then click "Update".'
-      : 'Open the Gem, find "Knowledge" and add the files below, then save the Gem.',
+    options.skill
+      ? 'In the skill editor, click "Add files" and add the files below.'
+      : options.link
+        ? 'Open the Gem, click the "+" under "Knowledge" and add the files below, then click "Update".'
+        : 'Open the Gem, find "Knowledge" and add the files below, then save the Gem.',
   ];
   if (memoryNeeded) {
     lines.push(
@@ -80,10 +90,12 @@ export function buildGemKnowledgeStep(
     copyBlocks: [],
     downloads,
     fileNames: notCopied.map((f) => f.originalName),
-    link: options.link ?? GEMINI_GEM_MANAGER_URL,
-    actionHint: options.link
-      ? 'Add the files under "Knowledge", then click "Update"'
-      : 'Add the files under "Knowledge", then save',
+    link: options.link ?? (options.skill ? GEMINI_SKILLS_URL : GEMINI_GEM_MANAGER_URL),
+    actionHint: options.skill
+      ? 'Click "Add files" and add them'
+      : options.link
+        ? 'Add the files under "Knowledge", then click "Update"'
+        : 'Add the files under "Knowledge", then save',
     ...(stepNumber !== undefined ? { stepNumber } : {}),
   };
 }
@@ -95,7 +107,9 @@ export function buildGemKnowledgeStep(
 export function generateGeminiInstructions(
   workspace: Workspace,
   sourceLabel = "your previous assistant",
+  now: Date = new Date(),
 ): MigrationGuidedInstructions {
+  if (geminiUsesSkills(now)) return generateGeminiSkillInstructions(workspace, sourceLabel);
   const instructions = getInstructionsForTarget(workspace, "gemini");
   const steps: MigrationStepFallback[] = [];
   const next = (): number => steps.length + 1;
@@ -148,6 +162,90 @@ export function generateGeminiInstructions(
     description: "Save your new Gem. It will appear under \"My Gems\".",
     copyBlocks: [],
     actionHint: "Save the Gem",
+    stepNumber: next(),
+  });
+
+  return {
+    workspaceId: workspace.id,
+    workspaceName: workspace.name,
+    steps,
+    totalSteps: steps.length,
+  };
+}
+
+/**
+ * Guided steps for creating a Gemini skill by hand, the route personal
+ * accounts take once Gems turn into skills.
+ */
+function generateGeminiSkillInstructions(
+  workspace: Workspace,
+  sourceLabel: string,
+): MigrationGuidedInstructions {
+  const instructions = getInstructionsForTarget(workspace, "gemini");
+  const steps: MigrationStepFallback[] = [];
+  const next = (): number => steps.length + 1;
+
+  steps.push({
+    id: `${workspace.id}-navigate`,
+    title: "Open Skills",
+    description:
+      'Open Skills in Gemini, click "Create" and choose "Create manually". The SKILL.md below holds everything in one file, to keep or share.',
+    copyBlocks: [],
+    downloads: [buildSkillDownload(workspace, sourceLabel, instructions)],
+    link: GEMINI_SKILLS_URL,
+    actionHint: 'Click "Create", then "Create manually"',
+    stepNumber: next(),
+  });
+
+  steps.push({
+    id: `${workspace.id}-name`,
+    title: "Enter the skill name",
+    description:
+      'Paste the name into the "Name" field. Skill names use lowercase letters, numbers and hyphens, so it is adjusted to fit.',
+    copyBlocks: [{ label: "Name", content: toSkillName(workspace.name) }],
+    stepNumber: next(),
+  });
+
+  steps.push({
+    id: `${workspace.id}-description`,
+    title: "Enter the description",
+    description: 'Paste the description into the "Description" field.',
+    copyBlocks: [
+      {
+        label: "Description",
+        content: skillDescription(
+          workspace.name,
+          workspace.description,
+          sourceLabel,
+        ),
+      },
+    ],
+    stepNumber: next(),
+  });
+
+  if (instructions.trim()) {
+    steps.push({
+      id: `${workspace.id}-instructions`,
+      title: "Paste the instructions",
+      description: 'Paste the instructions into the "Instructions" field.',
+      copyBlocks: [{ label: "Instructions", content: instructions }],
+      stepNumber: next(),
+    });
+  }
+
+  const knowledge = buildGemKnowledgeStep(workspace, sourceLabel, {
+    stepNumber: next(),
+    skill: true,
+  });
+  if (knowledge) steps.push(knowledge);
+
+  steps.push({
+    id: `${workspace.id}-save`,
+    title: "Create the skill",
+    description: 'Click "Create". The skill appears on the Skills page.',
+    copyBlocks: [],
+    link: GEMINI_SKILLS_URL,
+    actionHint: 'Click "Create"',
     stepNumber: next(),
   });
 

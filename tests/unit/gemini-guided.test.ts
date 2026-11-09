@@ -1,8 +1,9 @@
 import { describe, it, expect } from "vitest";
-import type { MemoryItem } from "@/core/schema/types";
+import type { MemoryItem, Workspace } from "@/core/schema/types";
 import {
   GEMINI_IMPORT_URL,
   buildGeminiChatImportStep,
+  generateGeminiInstructions,
   generateGeminiMemoryInstructions,
 } from "@/core/adapters/gemini-guided";
 import { buildMemoryStepsForTarget } from "@/core/adapters/memory-steps";
@@ -93,5 +94,75 @@ describe("buildMemoryStepsForTarget", () => {
     const steps = buildMemoryStepsForTarget(claudeManifest, "gemini");
     expect(steps.map((s) => s.id)).toEqual(["memory-chat-history"]);
     expect(steps[0]?.actions?.[0]?.url).toContain("claude.ai");
+  });
+});
+
+describe("generateGeminiInstructions and the Gems-to-skills switch", () => {
+  const workspace: Workspace = {
+    id: "w",
+    sourceId: "w",
+    name: "Trip Planner",
+    description: "",
+    instructions: { raw: "Plan trips" },
+    knowledgeFiles: [
+      {
+        id: "k",
+        originalName: "notes.md",
+        mimeType: "text/markdown",
+        sizeBytes: 3,
+        source: "exported",
+        contentRef: "ref-notes",
+        compatible: true,
+      },
+    ],
+    category: "other",
+    tags: [],
+    behavior: {},
+    capabilities: [],
+    conversationCount: 0,
+    lastActiveAt: "2026-10-01T00:00:00.000Z",
+    sampleTopics: [],
+    migration: { confidence: 1, warnings: [], manualStepsRequired: [] },
+  };
+
+  it("walks through creating a skill from Nov 17", () => {
+    const { steps } = generateGeminiInstructions(
+      workspace,
+      "ChatGPT",
+      new Date("2026-11-17T09:00:00-08:00"),
+    );
+    expect(steps.map((s) => s.title)).toEqual([
+      "Open Skills",
+      "Enter the skill name",
+      "Enter the description",
+      "Paste the instructions",
+      "Add knowledge files",
+      "Create the skill",
+    ]);
+    expect(steps[0]?.link).toBe("https://gemini.google.com/customize/skills");
+    expect(steps[0]?.description).toContain('"Create manually"');
+    expect(steps[0]?.downloads?.[0]?.fileName).toBe("trip-planner-SKILL.md");
+    expect(steps[1]?.copyBlocks[0]).toEqual({ label: "Name", content: "trip-planner" });
+    expect(steps[2]?.copyBlocks[0]?.label).toBe("Description");
+    expect(steps[3]?.copyBlocks[0]).toEqual({ label: "Instructions", content: "Plan trips" });
+    expect(steps[4]?.description).toContain('"Add files"');
+    expect(steps[4]?.link).toBe("https://gemini.google.com/customize/skills");
+    expect(steps[5]?.description).toContain('Click "Create"');
+    const text = JSON.stringify(
+      steps.map((s) => [s.title, s.description, s.actionHint, s.link, s.copyBlocks]),
+    );
+    expect(text).not.toMatch(/\bGems?\b|\/gems\//);
+  });
+
+  it("keeps the Gem steps before Nov 17", () => {
+    const { steps } = generateGeminiInstructions(
+      workspace,
+      "ChatGPT",
+      new Date("2026-11-16T09:00:00-08:00"),
+    );
+    expect(steps[0]?.title).toBe("Open the Gem manager");
+    expect(steps[0]?.link).toBe("https://gemini.google.com/gems/view");
+    expect(steps[1]?.copyBlocks[0]).toEqual({ label: "Gem name", content: "Trip Planner" });
+    expect(steps[steps.length - 1]?.title).toBe("Save the Gem");
   });
 });
