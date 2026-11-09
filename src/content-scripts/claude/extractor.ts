@@ -27,10 +27,12 @@ import type {
   ExtractedClaudeProject,
 } from "@/core/adapters/claude-dom-types";
 import { getMimeType } from "@/core/transform/file-compatibility";
+import { maskEmail } from "@/core/transform/account-guard";
 import { textToBase64 } from "@/shared/encoding";
 import {
   ClaudeApiError,
   claudeRequest,
+  getClaudeAccount,
   getOrgId,
   isUuid,
   mapWithConcurrency,
@@ -499,16 +501,23 @@ export async function extractProjects(
   }
 
   const source = memorySource(orgId);
+  // Which account this is, so a Claude to Claude move never writes back
+  // into it. Only the ID and a masked email leave this function.
+  const accountPromise = getClaudeAccount().then((account) =>
+    account ? { accountId: account.uuid, accountLabel: maskEmail(account.email) } : null,
+  );
   const readGlobal = async (): Promise<
-    Pick<ClaudeExtractionResult, "globalMemory" | "preferences">
+    Pick<ClaudeExtractionResult, "globalMemory" | "preferences" | "account">
   > => {
-    if (!options.includeGlobal) return {};
+    const account = await accountPromise;
+    const accountPart = account ? { account } : {};
+    if (!options.includeGlobal) return accountPart;
     progress("Reading your memory and preferences", 96);
     const [globalMemory, preferences] = await Promise.all([
       fetchGlobalMemory(orgId, warnings, source),
       fetchPreferences(warnings),
     ]);
-    return { globalMemory, preferences };
+    return { globalMemory, preferences, ...accountPart };
   };
 
   progress("Listing your projects", 5);

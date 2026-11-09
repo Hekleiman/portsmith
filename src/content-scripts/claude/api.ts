@@ -81,6 +81,28 @@ export async function claudeRequest<T>(
   }
 }
 
+export interface ClaudeAccount {
+  uuid: string;
+  email: string;
+}
+
+/**
+ * The signed-in Claude account (`GET /api/account`), or null when the
+ * request fails or the ID or email is missing.
+ */
+export async function getClaudeAccount(): Promise<ClaudeAccount | null> {
+  try {
+    const data = await claudeRequest<Record<string, unknown> | undefined>("/api/account", {}, 1);
+    const uuid = data?.uuid;
+    const email = data?.email_address;
+    if (typeof uuid !== "string" || !uuid.trim()) return null;
+    if (typeof email !== "string" || !email.trim()) return null;
+    return { uuid, email };
+  } catch {
+    return null;
+  }
+}
+
 /** Run `fn` over `items` with at most `limit` in flight, keeping order. */
 export async function mapWithConcurrency<T, R>(
   items: readonly T[],

@@ -439,3 +439,30 @@ describe("toMemoryEntry", () => {
     expect(toMemoryEntry("/projects/x/a.md", { content: "---\nname: a\n---\n" })).toBeNull();
   });
 });
+
+describe("extractProjects records the source account", () => {
+  const ACCOUNT = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+
+  it("keeps the account ID and a masked email, never the full address", async () => {
+    routes = (url, init) =>
+      url === "/api/account"
+        ? { body: { uuid: ACCOUNT, email_address: "hx7k2p9q4z@privaterelay.appleid.com", full_name: "E" } }
+        : defaultRoutes(url, init);
+    const result = await extractProjects({ includeMemory: false, includeKnowledge: false, includeGlobal: false });
+    expect(result.account).toEqual({ accountId: ACCOUNT, accountLabel: "h***@privaterelay.appleid.com" });
+    expect(JSON.stringify(result)).not.toContain("hx7k2p9q4z");
+
+    const manifest = generateClaudeManifest(result.projects, result.warnings, { account: result.account });
+    expect(manifest.source.accountId).toBe(ACCOUNT);
+    expect(manifest.source.accountLabel).toBe("h***@privaterelay.appleid.com");
+    expect(JSON.stringify(manifest)).not.toContain("hx7k2p9q4z");
+  });
+
+  it("leaves the fields out when the account can't be read", async () => {
+    const result = await extractProjects({ includeMemory: false, includeKnowledge: false, includeGlobal: false });
+    expect(result.success).toBe(true);
+    expect(result.account).toBeUndefined();
+    const manifest = generateClaudeManifest(result.projects, result.warnings, { account: result.account });
+    expect(manifest.source.accountId).toBeUndefined();
+  });
+});

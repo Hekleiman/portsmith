@@ -1,6 +1,6 @@
 import PlatformCard from "../components/PlatformCard";
 import { useMigrationStore } from "../store/migration-store";
-import { supportedModesForTarget } from "@/core/platforms";
+import { isAllowedPair, supportedModesForTarget } from "@/core/platforms";
 import { beforeGemsRemoved } from "@/core/transform/skill-package";
 
 const GEMS_TO_SKILLS_NOTICE =
@@ -38,7 +38,17 @@ export default function TargetSelect(): React.JSX.Element {
   const targetPlatform = useMigrationStore((s) => s.targetPlatform);
   const setTargetPlatform = useMigrationStore((s) => s.setTargetPlatform);
 
-  const available = PLATFORMS.filter((p) => p.id !== sourcePlatform);
+  const available = PLATFORMS.filter((p) => isAllowedPair(sourcePlatform, p.id)).map(
+    (p) =>
+      p.id === sourcePlatform
+        ? {
+            ...p,
+            name: "Claude (another account)",
+            description:
+              "Move projects into a different Claude account. You'll switch accounts before anything is written.",
+          }
+        : p,
+  );
   const showSkillsNotice = beforeGemsRemoved();
 
   return (

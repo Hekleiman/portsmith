@@ -61,4 +61,6 @@ export interface ClaudeExtractionResult {
   globalMemory?: ExtractedClaudeMemoryEntry[];
   /** "Instructions for Claude" from the account settings */
   preferences?: string;
+  /** The account this was copied from (masked email only, never the full address) */
+  account?: { accountId: string; accountLabel: string };
 }

@@ -22,6 +22,10 @@ export const PlatformIdentifierSchema = z.object({
     "manual",
   ]),
   exportedAt: z.string().datetime({ offset: true }),
+  /** Account the data was copied from (Claude), used by the account guard */
+  accountId: z.string().optional(),
+  /** Shortened email of that account, e.g. "e***@gmail.com" (never the full address) */
+  accountLabel: z.string().optional(),
 });
 
 export type PlatformIdentifier = z.infer<typeof PlatformIdentifierSchema>;

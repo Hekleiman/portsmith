@@ -192,6 +192,7 @@ export default function ClaudeExtract(): React.JSX.Element {
       const manifest = generateClaudeManifest(result.projects, result.warnings, {
         memory: result.globalMemory,
         preferences: result.preferences,
+        account: result.account,
       });
 
       const manifestId = `manifest-${Date.now()}`;
