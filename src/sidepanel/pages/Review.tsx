@@ -6,6 +6,66 @@ import { getInstructionsForTarget, platformLabel } from "@/core/platforms";
 import { hasProjectMemory } from "@/core/transform/project-memory";
 import WorkspaceCard from "../components/WorkspaceCard";
 import MemoryList from "../components/MemoryList";
+import {
+  buildGptBackupZip,
+  gptBackupFileName,
+  isGptWorkspace,
+} from "@/core/transform/gpt-backup";
+import type { Workspace } from "@/core/schema/types";
+
+// ─── GPT backup ─────────────────────────────────────────────
+
+interface GptBackupButtonProps {
+  workspaces: Workspace[];
+}
+
+/** Saves a zip with every custom GPT's settings before OpenAI retires them. */
+function GptBackupButton({ workspaces }: GptBackupButtonProps): React.JSX.Element {
+  const [error, setError] = useState<string | null>(null);
+
+  const handleClick = useCallback(() => {
+    setError(null);
+    try {
+      const now = new Date();
+      // zipSync allocates a plain ArrayBuffer, never a SharedArrayBuffer.
+      const bytes = buildGptBackupZip(workspaces, now) as Uint8Array<ArrayBuffer>;
+      const blob = new Blob([bytes], {
+        type: "application/zip",
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = gptBackupFileName(now);
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [workspaces]);
+
+  return (
+    <div className="mt-3">
+      <button
+        type="button"
+        onClick={handleClick}
+        className="w-full rounded-md border border-gray-200 bg-white px-3 py-1.5 text-sm font-medium text-blue-700 hover:bg-gray-50"
+      >
+        Download a backup of your GPTs
+      </button>
+      <p className="mt-1 text-xs text-gray-500">
+        Instructions, descriptions, conversation starters and file names, plus
+        a skill file for each GPT. Knowledge files aren&apos;t included.
+      </p>
+      {error && (
+        <p className="mt-0.5 text-[11px] text-red-700" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
 
 // ─── Select All / Deselect All ──────────────────────────────
 
@@ -275,6 +335,10 @@ export default function Review(): React.JSX.Element {
           </p>
         )}
       </div>
+
+      {manifest.workspaces.some(isGptWorkspace) && (
+        <GptBackupButton workspaces={manifest.workspaces} />
+      )}
 
       {/* Workspaces */}
       <section className="mt-4">
