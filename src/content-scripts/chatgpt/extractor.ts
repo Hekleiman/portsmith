@@ -24,6 +24,7 @@ import type {
 } from "@/shared/messaging";
 import { normalizeGizmoId } from "@/shared/chatgpt-ids";
 import { getAccessToken, listGptSummaries, listProjectSummaries } from "./api";
+import { MAX_DOWNLOAD_BYTES, downloadFileBlob, withDownloadFileId } from "./file-download";
 import type { ChatGPTGptSummary, ChatGPTProjectSummary } from "./api";
 import type {
   ExtractedCustomGPT,
@@ -509,97 +510,12 @@ async function extractInstructionsFromModal(
 
 // ─── File Blob Download ─────────────────────────────────────
 
-/** Files are passed around as base64 in runtime messages; keep them modest. */
-const MAX_DOWNLOAD_BYTES = 7_500_000;
-
 interface FileDownloadResult {
   contentRef?: string;
   fileName?: string;
   mimeType?: string;
   sizeBytes?: number;
   error?: string;
-}
-
-/**
- * Download a single file blob directly from ChatGPT's backend API.
- * Runs in the content script (same-origin), so the service worker
- * can't die mid-request.
- */
-async function downloadFileBlob(
-  fileId: string,
-  gizmoId: string,
-): Promise<{
-  success: boolean;
-  blob?: string;
-  fileName?: string;
-  mimeType?: string;
-  sizeBytes?: number;
-  error?: string;
-}> {
-  try {
-    // Step 1: Get access token from ChatGPT session
-    const sessionResp = await fetch("/api/auth/session");
-    if (!sessionResp.ok) return { success: false, error: "Failed to get session" };
-    const session = (await sessionResp.json()) as Record<string, unknown>;
-    const token = session.accessToken as string | undefined;
-    if (!token) return { success: false, error: "No access token" };
-
-    const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
-
-    // Step 2: Get signed download URL
-    console.log("[PortSmith] Fetching download URL for:", fileId);
-    const dlResp = await fetch(
-      `/backend-api/files/download/${encodeURIComponent(fileId)}?gizmo_id=${encodeURIComponent(gizmoId)}`,
-      { headers },
-    );
-    if (!dlResp.ok) return { success: false, error: `HTTP ${dlResp.status}` };
-    const dlData = (await dlResp.json()) as { download_url?: string };
-    if (!dlData.download_url) return { success: false, error: "No download URL" };
-
-    // Step 3: Get file metadata
-    let meta: { file_name?: string; mime_type?: string } = {};
-    try {
-      const metaResp = await fetch(
-        `/backend-api/files/${encodeURIComponent(fileId)}/simple?gizmo_id=${encodeURIComponent(gizmoId)}`,
-        { headers },
-      );
-      if (metaResp.ok) meta = (await metaResp.json()) as typeof meta;
-    } catch {
-      // Non-fatal: metadata is nice-to-have
-    }
-
-    // Step 4: Download the actual file blob
-    console.log("[PortSmith] Downloading blob for:", meta.file_name ?? fileId);
-    const blobResp = await fetch(dlData.download_url);
-    if (!blobResp.ok) return { success: false, error: `Blob HTTP ${blobResp.status}` };
-
-    const arrayBuffer = await blobResp.arrayBuffer();
-    const bytes = new Uint8Array(arrayBuffer);
-
-    if (bytes.length > MAX_DOWNLOAD_BYTES) {
-      return { success: false, error: `Too large (${(bytes.length / 1024 / 1024).toFixed(1)}MB)` };
-    }
-
-    // Base64 encode in chunks to avoid call stack overflow
-    let binary = "";
-    const chunkSize = 8192;
-    for (let i = 0; i < bytes.length; i += chunkSize) {
-      binary += String.fromCharCode(...bytes.subarray(i, Math.min(i + chunkSize, bytes.length)));
-    }
-
-    console.log("[PortSmith] File downloaded:", meta.file_name ?? fileId, `(${(bytes.length / 1024).toFixed(1)}KB)`);
-
-    return {
-      success: true,
-      blob: btoa(binary),
-      fileName: meta.file_name ?? undefined,
-      mimeType: meta.mime_type ?? blobResp.headers.get("content-type") ?? "application/octet-stream",
-      sizeBytes: bytes.length,
-    };
-  } catch (e: unknown) {
-    console.error("[PortSmith] Download error for", fileId, e);
-    return { success: false, error: e instanceof Error ? e.message : String(e) };
-  }
 }
 
 /**
@@ -719,7 +635,9 @@ async function extractSingleProject(
         const instructions = gizmo?.instructions ?? "";
         const name = gizmo?.display?.name ?? sidebarName ?? "Unknown Project";
         const description = gizmo?.display?.description ?? "";
-        const apiFiles = apiResult.files ?? [];
+        // The gizmo response gives each file an `id` and a `file_id`, and
+        // only `file_id` ("file-..."/"file_...") works for downloads.
+        const apiFiles = (apiResult.files ?? []).map(withDownloadFileId);
         const knowledgeFileNames = apiFiles.map((f) => f.name);
 
         // Download file blobs in parallel (non-blocking — failures fall back to manual)
