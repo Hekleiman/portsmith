@@ -1,6 +1,10 @@
 import PlatformCard from "../components/PlatformCard";
 import { useMigrationStore } from "../store/migration-store";
 import { supportedModesForTarget } from "@/core/platforms";
+import { beforeGemsRemoved } from "@/core/transform/skill-package";
+
+const GEMS_TO_SKILLS_NOTICE =
+  "Gemini is turning Gems into skills on Nov 17. On personal Google accounts, PortSmith will hand you a skill to add instead.";
 
 const PLATFORMS = [
   {
@@ -35,6 +39,7 @@ export default function TargetSelect(): React.JSX.Element {
   const setTargetPlatform = useMigrationStore((s) => s.setTargetPlatform);
 
   const available = PLATFORMS.filter((p) => p.id !== sourcePlatform);
+  const showSkillsNotice = beforeGemsRemoved();
 
   return (
     <div className="flex flex-col gap-4">
@@ -50,23 +55,27 @@ export default function TargetSelect(): React.JSX.Element {
         {available.map((p) => {
           const guidedOnly = supportedModesForTarget(p.id).length === 1;
           return (
-            <PlatformCard
-              key={p.id}
-              name={p.name}
-              description={p.description}
-              selected={targetPlatform === p.id}
-              disabled={false}
-              badge={guidedOnly ? "Guided only" : undefined}
-              onClick={() => setTargetPlatform(p.id)}
-              icon={
-                <div
-                  className={`flex h-10 w-10 items-center justify-center rounded-lg ${p.color}`}
-                  aria-hidden="true"
-                >
-                  <span className="text-lg font-bold">{p.letter}</span>
-                </div>
-              }
-            />
+            <div key={p.id}>
+              <PlatformCard
+                name={p.name}
+                description={p.description}
+                selected={targetPlatform === p.id}
+                disabled={false}
+                badge={guidedOnly ? "Guided only" : undefined}
+                onClick={() => setTargetPlatform(p.id)}
+                icon={
+                  <div
+                    className={`flex h-10 w-10 items-center justify-center rounded-lg ${p.color}`}
+                    aria-hidden="true"
+                  >
+                    <span className="text-lg font-bold">{p.letter}</span>
+                  </div>
+                }
+              />
+              {p.id === "gemini" && showSkillsNotice && (
+                <p className="mt-1 px-1 text-xs text-gray-600">{GEMS_TO_SKILLS_NOTICE}</p>
+              )}
+            </div>
           );
         })}
       </div>

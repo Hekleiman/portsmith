@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import type { Workspace } from "@/core/schema/types";
 import {
   buildKnowledgeField,
@@ -122,7 +122,13 @@ describe("buildGemKnowledgeStep", () => {
 });
 
 describe("buildLeftoverCards", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("shows manual creates and missing knowledge", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-16T09:00:00-08:00"));
     const a = ws();
     const b = ws({ id: "b", name: "Other" });
     const cards = buildLeftoverCards(
