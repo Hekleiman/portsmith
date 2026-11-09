@@ -81,7 +81,11 @@ export interface GizmoAPIResponse {
     };
     memory_enabled: boolean;
   };
-  files?: Array<{ id?: string; name: string; type: string; size: number }>;
+  /**
+   * `id` and `file_id` differ; only `file_id` ("file-..."/"file_...")
+   * works with /backend-api/files/download.
+   */
+  files?: Array<{ id?: string; file_id?: string; name: string; type: string; size: number }>;
   error?: string;
 }
 

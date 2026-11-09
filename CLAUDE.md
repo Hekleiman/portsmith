@@ -4,7 +4,7 @@
 
 PortSmith is a Chrome (MV3) extension that moves AI assistant setups (projects, custom GPTs, Gems, instructions, knowledge files, memory and project memory) between ChatGPT, Claude and Gemini. Everything runs client-side; there is no PortSmith server.
 
-**Current version: 0.4.0.** Six directions:
+**Current version: 0.5.1.** Six directions:
 - Into Claude and Gemini: automatic (internal web APIs from content scripts), with manual fallback cards.
 - Into ChatGPT: automatic for projects, instructions and Sources files; memory and custom instructions stay guided.
 - Same-platform migrations are blocked.
