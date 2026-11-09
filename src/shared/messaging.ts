@@ -231,6 +231,8 @@ export interface OrchestratorStatus {
   knowledgeLeftovers: Record<string, KnowledgeLeftover>;
   /** Steps an automatic run left for the user instead of waiting, per workspace */
   leftoverSteps: Record<string, MigrationStepFallback[]>;
+  /** Set when the run ended before writing anything (Claude to Claude account guard) */
+  stoppedReason?: string;
   /** Memories PortSmith saved to the target by itself (null: it didn't try) */
   memoryAutoSaved: { saved: number; total: number; reasons?: string[] } | null;
   /** Whether the user finished the memory steps (null: there were none yet) */
@@ -416,6 +418,15 @@ export interface MessageMap {
   CLAUDE_EXTRACT_PROJECTS: {
     request: ClaudeExtractionOptions;
     response: ClaudeExtractionResult;
+  };
+  /**
+   * The signed-in Claude account, for the Claude to Claude account guard.
+   * `email` is already masked ("e***@gmail.com"); the full address never
+   * leaves the content script.
+   */
+  CLAUDE_GET_ACCOUNT: {
+    request: void;
+    response: { account: { uuid: string; email: string } | null };
   };
   /** Add a text document to a Claude project's knowledge */
   CLAUDE_CREATE_DOC: {

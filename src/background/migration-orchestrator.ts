@@ -26,6 +26,7 @@ import {
   renderProjectMemoryMarkdown,
 } from "@/core/transform/project-memory";
 import { textToBase64 } from "@/shared/encoding";
+import { checkTargetAccount } from "@/core/transform/account-guard";
 import {
   CHATGPT_INSTRUCTIONS_MAX,
   CHATGPT_PROJECT_NAME_MAX,
@@ -149,6 +150,8 @@ export class MigrationOrchestrator {
   /** Google account path of the pinned Gemini tab, e.g. "/u/1/" */
   private geminiAccount: string | null = null;
   private duplicateTabWarning: string | null = null;
+  /** Why the run ended before writing anything (Claude to Claude account guard) */
+  private stoppedReason: string | null = null;
 
   /**
    * Every start/resume/cancel bumps the run id. Async loops capture the id
@@ -339,6 +342,7 @@ export class MigrationOrchestrator {
       memoryImported: this.memoryImported,
       memoryAutoSaved: this.memoryAutoSaved,
       duplicateTabWarning: this.duplicateTabWarning ?? undefined,
+      stoppedReason: this.stoppedReason ?? undefined,
     };
   }
 
@@ -605,6 +609,14 @@ export class MigrationOrchestrator {
   }
 
   private async processWorkspaces(run: number): Promise<void> {
+    // Claude to Claude: never write into the account the data came from.
+    // Checked before the first create, upload or doc call (and again on
+    // resume, since the signed-in account can change in between).
+    if (this.isClaudeToClaude() && this.currentWorkspaceIndex < this.workspaceIds.length) {
+      const ok = await this.guardClaudeAccount(run);
+      if (!this.isCurrent(run) || !ok) return;
+    }
+
     while (this.currentWorkspaceIndex < this.workspaceIds.length) {
       if (!this.isCurrent(run)) return;
 
@@ -858,6 +870,103 @@ export class MigrationOrchestrator {
     }
     if (saved === wanted.length) this.memoryImported = true;
     else await this.openLeftoverPage("https://gemini.google.com", "/saved-info");
+  }
+
+  // ─── Claude to Claude account guard ──────────────────────
+
+  private isClaudeToClaude(): boolean {
+    return this.manifest?.source.platform === "claude" && this.targetPlatform === "claude";
+  }
+
+  /** The signed-in Claude account (email already masked), or null. */
+  private async readClaudeAccount(): Promise<{ uuid: string; email: string } | null> {
+    const tabId = await this.validateAndPinTab();
+    if (tabId === null) return null;
+    try {
+      const { account } = await safeSendTabMessage(tabId, "CLAUDE_GET_ACCOUNT");
+      return account ?? null;
+    } catch (err) {
+      console.warn(
+        `[PortSmith] Couldn't read the Claude account: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Fails closed: resolves true only when the signed-in account is known
+   * and differs from the source account. Otherwise the run ends with
+   * nothing written, or waits while the user switches accounts.
+   */
+  private async guardClaudeAccount(run: number): Promise<boolean> {
+    const stepId = "claude-account-check";
+    const source = this.manifest?.source ?? {};
+    const sourceLabel = this.manifest?.source.accountLabel ?? "the account PortSmith copied from";
+
+    for (;;) {
+      this.updateStep({
+        id: stepId,
+        title: "Checking which Claude account is signed in",
+        status: "running",
+      });
+      const current = await this.readClaudeAccount();
+      if (!this.isCurrent(run)) return false;
+
+      const result = checkTargetAccount(source, current);
+      if (result === "ok" && current) {
+        console.log(`[PortSmith] Claude to Claude: moving from ${sourceLabel} into ${current.email}`);
+        this.updateStep({
+          id: stepId,
+          title: `Signed in to ${current.email}, not the account copied from`,
+          status: "success",
+        });
+        return true;
+      }
+
+      if (result === "same-account") {
+        const title = "Switch to the Claude account you're moving into";
+        this.updateStep({
+          id: stepId,
+          title,
+          status: "pending",
+          confirmLabel: "I've switched",
+          skipLabel: "Stop",
+          fallback: {
+            id: stepId,
+            title: "Still signed in to the account copied from",
+            description: `You're signed in to ${sourceLabel}, the account PortSmith copied from. Sign out of claude.ai, sign in to the account you're moving to in this browser, then click "I've switched".`,
+            copyBlocks: [],
+          },
+        });
+        const switched = await this.waitForConfirmation(stepId);
+        if (!this.isCurrent(run)) return false;
+        if (switched) continue;
+        await this.stopBeforeWriting(
+          run,
+          stepId,
+          "Stopped before switching accounts, so nothing was written.",
+        );
+        return false;
+      }
+
+      await this.stopBeforeWriting(
+        run,
+        stepId,
+        result === "unknown-source"
+          ? "This data was copied before PortSmith recorded which account it came from. Copy it again from the original account, then switch accounts."
+          : "PortSmith couldn't read which Claude account is signed in, so nothing was written. Open claude.ai, make sure you're signed in, and try again.",
+      );
+      return false;
+    }
+  }
+
+  /** End the run without writing anything, with the reason on screen. */
+  private async stopBeforeWriting(run: number, stepId: string, reason: string): Promise<void> {
+    this.stoppedReason = reason;
+    this.updateStep({ id: stepId, title: reason, status: "failed" });
+    this.memorySteps = [];
+    this.phase = "complete";
+    await this.checkpointState(run);
   }
 
   /** Suspend until the user answers the pending step. */
@@ -1931,6 +2040,7 @@ export class MigrationOrchestrator {
     this.migrationTabId = null;
     this.geminiAccount = null;
     this.duplicateTabWarning = null;
+    this.stoppedReason = null;
   }
 }
 

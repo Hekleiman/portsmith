@@ -1500,3 +1500,117 @@ describe("MigrationOrchestrator: ChatGPT target", () => {
     ]);
   });
 });
+
+describe("MigrationOrchestrator: Claude to Claude account guard", () => {
+  const SOURCE = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const OTHER = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  const WRITES = ["CLAUDE_CREATE_PROJECT", "CLAUDE_UPLOAD_FILE", "CLAUDE_CREATE_DOC", "CLAUDE_SET_INSTRUCTIONS"];
+
+  function claudeManifest(accountId: string | null = SOURCE): void {
+    putManifest("m1", [ws("a"), ws("b")], {
+      source: {
+        platform: "claude",
+        exportMethod: "api",
+        exportedAt: "2026-11-09T00:00:00.000Z",
+        ...(accountId ? { accountId, accountLabel: "h***@privaterelay.appleid.com" } : {}),
+      },
+    });
+  }
+
+  function signedIn(account: () => { uuid: string; email: string } | null) {
+    return (name: string): unknown =>
+      name === "CLAUDE_GET_ACCOUNT" ? { account: account() } : { success: true };
+  }
+
+  const writes = (): string[] =>
+    h.tabMessages.map((m) => m.name).filter((n) => WRITES.includes(n));
+
+  it("waits on the switch step while signed in to the source account, then continues", async () => {
+    claudeManifest();
+    let current = { uuid: SOURCE, email: "h***@privaterelay.appleid.com" };
+    h.tabResponder = signedIn(() => current);
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "autofill", ["a", "b"], "claude");
+    await waitFor(() => o.getStatus().pendingConfirmStepId === "claude-account-check", "switch step");
+
+    const step = o.getStatus().currentSteps.find((s) => s.id === "claude-account-check")!;
+    expect(step.title).toBe("Switch to the Claude account you're moving into");
+    expect(step.status).toBe("pending");
+    expect(step.confirmLabel).toBe("I've switched");
+    expect(step.skipLabel).toBe("Stop");
+    expect(step.fallback?.description).toContain("h***@privaterelay.appleid.com");
+    expect(h.autofillCalls).toEqual([]);
+    expect(writes()).toEqual([]);
+
+    // Confirming without switching asks again.
+    expect(o.confirmStep(true, token(o))).toBe(true);
+    await waitFor(
+      () => o.getStatus().pendingConfirmStepId === "claude-account-check" && h.tabMessages.length >= 2,
+      "asked again",
+    );
+    expect(h.autofillCalls).toEqual([]);
+
+    current = { uuid: OTHER, email: "e***@gmail.com" };
+    expect(o.confirmStep(true, token(o))).toBe(true);
+    await waitFor(() => o.getStatus().phase === "complete", "complete");
+    expect(h.autofillCalls).toEqual(["a", "b"]);
+    expect(o.getStatus().completedWorkspaceIds).toEqual(["a", "b"]);
+    expect(o.getStatus().stoppedReason).toBeUndefined();
+  });
+
+  it("stops with nothing written when the user stops at the switch step", async () => {
+    claudeManifest();
+    h.tabResponder = signedIn(() => ({ uuid: SOURCE, email: "h***@privaterelay.appleid.com" }));
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "hybrid", ["a"], "claude");
+    await waitFor(() => o.getStatus().pendingConfirmStepId === "claude-account-check", "switch step");
+    expect(o.confirmStep(false, token(o))).toBe(true);
+    await waitFor(() => o.getStatus().phase === "complete", "complete");
+    expect(o.getStatus().stoppedReason).toMatch(/nothing was written/);
+    expect(o.getStatus().completedWorkspaceIds).toEqual([]);
+    expect(h.autofillCalls).toEqual([]);
+    expect(writes()).toEqual([]);
+  });
+
+  it("stops with nothing written when the signed-in account can't be read", async () => {
+    claudeManifest();
+    h.tabResponder = signedIn(() => null);
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "autofill", ["a", "b"], "claude");
+    await waitFor(() => o.getStatus().phase === "complete", "complete");
+    expect(o.getStatus().stoppedReason).toBe(
+      "PortSmith couldn't read which Claude account is signed in, so nothing was written. Open claude.ai, make sure you're signed in, and try again.",
+    );
+    expect(o.getStatus().memorySteps).toEqual([]);
+    expect(h.autofillCalls).toEqual([]);
+    expect(writes()).toEqual([]);
+  });
+
+  it("stops when the copy predates the recorded source account", async () => {
+    claudeManifest(null);
+    h.tabResponder = signedIn(() => ({ uuid: OTHER, email: "e***@gmail.com" }));
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "autofill", ["a"], "claude");
+    await waitFor(() => o.getStatus().phase === "complete", "complete");
+    expect(o.getStatus().stoppedReason).toMatch(/^This data was copied before PortSmith recorded/);
+    expect(h.autofillCalls).toEqual([]);
+  });
+
+  it("guards guided runs too, and leaves other sources alone", async () => {
+    claudeManifest();
+    h.tabResponder = signedIn(() => ({ uuid: SOURCE, email: "h***@privaterelay.appleid.com" }));
+    const o = new MigrationOrchestrator();
+    await o.start("m1", "guided", ["a"], "claude");
+    await waitFor(() => o.getStatus().pendingConfirmStepId === "claude-account-check", "switch step");
+    expect(o.getStatus().guidedInstructions).toBeNull();
+    o.cancel();
+
+    putManifest("m2", [ws("c")]);
+    h.tabMessages.length = 0;
+    const o2 = new MigrationOrchestrator();
+    await o2.start("m2", "autofill", ["c"], "claude");
+    await waitFor(() => o2.getStatus().phase === "complete", "complete");
+    expect(h.tabMessages.map((m) => m.name)).not.toContain("CLAUDE_GET_ACCOUNT");
+    expect(h.autofillCalls).toEqual(["c"]);
+  });
+});

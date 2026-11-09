@@ -22,6 +22,19 @@ export function platformLabel(id: string | null | undefined): string {
   return isPlatformId(id) ? PLATFORM_LABELS[id] : "the target platform";
 }
 
+/**
+ * Whether a source and target can be paired. Moving a platform into itself
+ * is blocked, except Claude to Claude, which moves between two different
+ * Claude accounts (the orchestrator's account guard enforces "different").
+ */
+export function isAllowedPair(
+  source: string | null | undefined,
+  target: string | null | undefined,
+): boolean {
+  if (!source || !target) return true;
+  return source !== target || source === "claude";
+}
+
 /** Where users manage the migrated items on each platform. */
 export const PLATFORM_HOME_URLS: Record<PlatformId, string> = {
   chatgpt: "https://chatgpt.com/",

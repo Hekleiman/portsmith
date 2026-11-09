@@ -330,9 +330,32 @@ describe("resume flow", () => {
 
 describe("platform selection guards", () => {
   it("clears the target when the source is set to the same platform", () => {
+    useMigrationStore.setState({ targetPlatform: "gemini" });
+    useMigrationStore.getState().setSourcePlatform("gemini");
+    expect(useMigrationStore.getState().sourcePlatform).toBe("gemini");
+    expect(useMigrationStore.getState().targetPlatform).toBeNull();
+  });
+
+  it("keeps a Claude target when the source becomes Claude (another account)", () => {
     useMigrationStore.setState({ targetPlatform: "claude" });
     useMigrationStore.getState().setSourcePlatform("claude");
     expect(useMigrationStore.getState().sourcePlatform).toBe("claude");
+    expect(useMigrationStore.getState().targetPlatform).toBe("claude");
+  });
+
+  it("allows Claude to Claude", async () => {
+    const { canProceed } = await import("@/sidepanel/store/migration-store");
+    useMigrationStore.getState().setSourcePlatform("claude");
+    useMigrationStore.getState().setTargetPlatform("claude");
+    expect(useMigrationStore.getState().targetPlatform).toBe("claude");
+    expect(
+      canProceed({ ...useMigrationStore.getState(), phase: "target_selection" as const }),
+    ).toBe(true);
+  });
+
+  it("still refuses ChatGPT to ChatGPT", () => {
+    useMigrationStore.getState().setSourcePlatform("chatgpt");
+    useMigrationStore.getState().setTargetPlatform("chatgpt");
     expect(useMigrationStore.getState().targetPlatform).toBeNull();
   });
 
@@ -347,10 +370,11 @@ describe("platform selection guards", () => {
     const state = {
       ...useMigrationStore.getState(),
       phase: "target_selection" as const,
-      sourcePlatform: "claude",
-      targetPlatform: "claude",
+      sourcePlatform: "gemini",
+      targetPlatform: "gemini",
     };
     expect(canProceed(state)).toBe(false);
+    expect(canProceed({ ...state, sourcePlatform: "chatgpt", targetPlatform: "chatgpt" })).toBe(false);
   });
 
   it("cannot start a run with nothing selected", async () => {
@@ -389,12 +413,21 @@ describe("platform selection guards", () => {
 
   it("ignores a saved target that equals the saved source", async () => {
     prefStore = {
+      "pref:lastSourcePlatform": "gemini",
+      "pref:lastTargetPlatform": "gemini",
+    };
+    await useMigrationStore.getState().checkForResume();
+    expect(useMigrationStore.getState().sourcePlatform).toBe("gemini");
+    expect(useMigrationStore.getState().targetPlatform).toBeNull();
+  });
+
+  it("keeps a saved Claude to Claude pair", async () => {
+    prefStore = {
       "pref:lastSourcePlatform": "claude",
       "pref:lastTargetPlatform": "claude",
     };
     await useMigrationStore.getState().checkForResume();
-    expect(useMigrationStore.getState().sourcePlatform).toBe("claude");
-    expect(useMigrationStore.getState().targetPlatform).toBeNull();
+    expect(useMigrationStore.getState().targetPlatform).toBe("claude");
   });
 });
 

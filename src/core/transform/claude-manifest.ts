@@ -164,6 +164,8 @@ export interface ClaudeGlobalData {
   memory?: ExtractedClaudeMemoryEntry[];
   /** "Instructions for Claude" */
   preferences?: string;
+  /** Account the data came from (ID and masked email), for the account guard */
+  account?: { accountId: string; accountLabel: string };
 }
 
 export function generateClaudeManifest(
@@ -183,6 +185,9 @@ export function generateClaudeManifest(
       platform: "claude",
       exportMethod: "api",
       exportedAt: now,
+      ...(global.account
+        ? { accountId: global.account.accountId, accountLabel: global.account.accountLabel }
+        : {}),
     },
     user: {
       expertise: [],

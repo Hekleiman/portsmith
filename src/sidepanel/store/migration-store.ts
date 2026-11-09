@@ -16,7 +16,7 @@ import {
   getPreference,
   setPreference,
 } from "@/core/storage/preferences";
-import { supportedModesForTarget } from "@/core/platforms";
+import { isAllowedPair, supportedModesForTarget } from "@/core/platforms";
 
 // ─── Phase / Step mapping ────────────────────────────────────
 
@@ -176,7 +176,7 @@ export function canProceed(state: MigrationState): boolean {
     case "target_selection":
       return (
         state.targetPlatform !== null &&
-        state.targetPlatform !== state.sourcePlatform
+        isAllowedPair(state.sourcePlatform, state.targetPlatform)
       );
     case "extraction_method":
       return state.extractionMethod !== null;
@@ -283,15 +283,17 @@ export const useMigrationStore = create<MigrationStore>((set, get) => ({
       selectedWorkspaceIds: [],
       editingWorkspaceId: null,
       extractionMethod: null,
-      // Migrating a platform into itself is never what the user wants.
-      ...(targetPlatform === platform ? { targetPlatform: null } : {}),
+      // Same-platform moves are only offered for Claude (between accounts).
+      ...(targetPlatform !== null && !isAllowedPair(platform, targetPlatform)
+        ? { targetPlatform: null }
+        : {}),
     });
     void setPreference("lastSourcePlatform", platform).catch(() => {});
   },
 
   setTargetPlatform: (platform) => {
     const { sourcePlatform, deliveryMode } = get();
-    if (platform === sourcePlatform) return;
+    if (!isAllowedPair(sourcePlatform, platform)) return;
     const modes = supportedModesForTarget(platform);
     set({
       targetPlatform: platform,
@@ -362,7 +364,7 @@ export const useMigrationStore = create<MigrationStore>((set, get) => ({
         getPreference("lastTargetPlatform"),
       ]);
       const source = savedSource ?? null;
-      const target = savedTarget && savedTarget !== source ? savedTarget : null;
+      const target = savedTarget && isAllowedPair(source, savedTarget) ? savedTarget : null;
       set({
         pendingResume: null,
         resumeChecked: true,

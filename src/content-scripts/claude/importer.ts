@@ -12,11 +12,13 @@ import { isTextLikeFile } from "@/core/transform/file-compatibility";
 import {
   ClaudeApiError,
   claudeRequest,
+  getClaudeAccount,
   getOrgId,
   isUuid,
   listProjectSummaries,
   nameKey,
 } from "./api";
+import { maskEmail } from "@/core/transform/account-guard";
 
 // ─── DOM Action Helpers ─────────────────────────────────────
 
@@ -668,6 +670,14 @@ onMessage("CLAUDE_FIND_PROJECTS", async (payload) => {
   } catch (e) {
     return { found: [], notFound: payload.names, error: apiError(e) };
   }
+});
+
+// ─── Account (Claude to Claude guard) ─────────────────────
+
+onMessage("CLAUDE_GET_ACCOUNT", async () => {
+  const account = await getClaudeAccount();
+  // Only the masked address leaves the page.
+  return { account: account ? { uuid: account.uuid, email: maskEmail(account.email) } : null };
 });
 
 // ─── Ping Handler ───────────────────────────────────────────

@@ -510,6 +510,32 @@ export default function Migrate(): React.JSX.Element {
 
   // ─── Complete ────────────────────────────────────────────
 
+  if (status.phase === "complete" && status.stoppedReason) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-4 py-8 text-center">
+        <div
+          className="flex h-12 w-12 items-center justify-center rounded-full bg-amber-100"
+          aria-hidden="true"
+        >
+          <span className="text-xl text-amber-800">⚠</span>
+        </div>
+        <div className="w-full">
+          <h2 className="text-lg font-semibold text-gray-900">Stopped: nothing was written</h2>
+          <p className="mt-1 text-sm text-gray-600" role="alert">
+            {status.stoppedReason}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={handleComplete}
+          className="rounded-lg bg-blue-700 px-6 py-2 text-sm font-medium text-white hover:bg-blue-800"
+        >
+          Continue
+        </button>
+      </div>
+    );
+  }
+
   if (status.phase === "complete") {
     const clipboardWorkspaces = Object.entries(
       status.instructionsDelivery,
@@ -731,13 +757,29 @@ export default function Migrate(): React.JSX.Element {
 
   if (status.mode === "guided") {
     if (!status.guidedInstructions) {
+      // A question can come before the first workspace (the Claude to
+      // Claude account check).
+      const waiting = status.pendingConfirmStepId
+        ? status.currentSteps.find(
+            (s) => s.id === status.pendingConfirmStepId && s.status === "pending",
+          )
+        : undefined;
       return (
         <div className="flex flex-col gap-3">
           {disconnectedBanner}
           <OverallProgress status={status} />
-          <p className="text-sm text-gray-600" role="status">
-            Preparing the next workspace...
-          </p>
+          {waiting ? (
+            <PendingStep
+              key={status.pendingConfirmToken ?? waiting.id}
+              step={waiting}
+              busy={busy}
+              onAnswer={(confirmed) => handleConfirm(status.pendingConfirmToken, confirmed)}
+            />
+          ) : (
+            <p className="text-sm text-gray-600" role="status">
+              Preparing the next workspace...
+            </p>
+          )}
         </div>
       );
     }
